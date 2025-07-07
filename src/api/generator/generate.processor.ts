@@ -7,6 +7,8 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import * as pluralize from 'pluralize';
 import { snakeCase, camelCase, upperFirst } from 'lodash';
+import { getApiProperty } from '../../utils/dto.helper';
+import { applyValidation } from '../../utils/dto.helper';
 @Processor('generate-queue')
 export class GenerateProcessor {
   @Process('generate-crud')
@@ -152,6 +154,8 @@ export class GenerateProcessor {
         pluralize,
         snakeCase,
         camelCase,
+        getApiProperty,
+        applyValidation,
         // ...any more
       };
 
