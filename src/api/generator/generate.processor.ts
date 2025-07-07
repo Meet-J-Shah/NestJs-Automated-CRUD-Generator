@@ -14,7 +14,7 @@ export class GenerateProcessor {
     console.log('GenerateProcessor received job:', job.id, job.data);
 
     try {
-      const { name, fields, creationConfig, primaryFields } = job.data;
+      const { name, fields, creationConfig, primaryFields, indices } = job.data;
       const className = name.charAt(0).toUpperCase() + name.slice(1);
       const camelName = className.charAt(0).toLowerCase() + className.slice(1);
       const fileName = name.toLowerCase();
@@ -37,11 +37,98 @@ export class GenerateProcessor {
         text: 'text',
         uuid: 'char(36)',
       };
+      for (const field of fields) {
+        if (field.Type === 'String') {
+          field.type = 'string';
+          field.dtype = field.subTypeOptions.subType || 'varchar';
+        } else if (field.Type === 'Text') {
+          field.type = 'string';
+          field.dtype = field.subTypeOptions.subType || 'text';
+        } else if (field.Type === 'Boolean') {
+          field.type = 'boolean';
+          field.dtype = field.subTypeOptions.subType || 'tinyint';
+        } else if (field.Type === 'Json') {
+          field.type = 'Record<string, any>';
+          field.dtype = field.subTypeOptions.subType || 'json';
+        } else if (field.Type === 'Enum') {
+          field.type = 'string';
+          field.dtype = field.subTypeOptions.subType || 'enum';
+          field.enum = field.subTypeOptions.values;
+        } else if (field.Type === 'Set') {
+          field.type = `string []`;
+          field.dtype = field.subTypeOptions.subType || 'simple-array';
+          field.enum = field.subTypeOptions.values;
+        } else if (field.Type === 'Uid') {
+          field.unique = true;
+          if (field.subTypeOptions.subType === 'uuid') {
+            field.dtype = 'char';
+            field.length = 36;
+          } else if (field.subTypeOptions.subType === 'bigint') {
+            field.dtype = 'bigint';
+            field.type = 'string';
+            field.length = field.subTypeOptions.length || 20;
+          } else if (field.subTypeOptions.subType === 'string') {
+            field.dtype = 'varchar';
+            field.type = 'string';
+            field.length = field.subTypeOptions.length || 20;
+          }
+        } else if (field.Type === 'DateTime') {
+          if (
+            ['date', 'datetime', 'timestamp'].includes(
+              field.subTypeOptions.subType,
+            )
+          ) {
+            field.type = 'Date';
+            field.dtype = field.subTypeOptions.subType || 'timestamp';
+          } else if (field.subTypeOptions.subType === 'time') {
+            field.type = 'string';
+            field.dtype = field.subTypeOptions.subType || 'time';
+          }
+        } else if (field.Type === 'Number') {
+          if (['bigint', 'decimal'].includes(field.subTypeOptions.subType)) {
+            field.type = 'string';
+            field.dtype = field.subTypeOptions.subType;
+          } else if (
+            ['smallint', 'int', 'float', 'double'].includes(
+              field.subTypeOptions.subType,
+            )
+          ) {
+            field.type = 'number';
+            field.dtype = field.subTypeOptions.subType || 'float';
+          }
+        } else if (field.Type === 'Relation') {
+        } else if (field.Type === 'Email') {
+          field.type = 'string';
+          field.dtype = 'varchar';
+          field.length = field.subTypeOptions.length || 255;
+        } else if (field.Type === 'Password') {
+          field.type = 'string';
+          field.dtype = 'varchar';
+          field.length = field.subTypeOptions.length || 255;
+        } else if (field.Type === 'PhoneNumber') {
+          field.type = 'string';
+          field.dtype = 'varchar';
+          field.length = field.subTypeOptions.length || 20;
+        }
 
+        if (
+          field.Type !== 'Relation' &&
+          field.subTypeOptions?.default !== undefined
+        ) {
+          field.default = field.subTypeOptions.default;
+        }
+        if (
+          field.Type !== 'Relation' &&
+          field.subTypeOptions?.length !== undefined
+        ) {
+          field.length = field.subTypeOptions.length;
+        }
+      }
       const templateData = {
         name,
         fields,
         primaryFields,
+        indices,
         className,
         tableName,
         dbTableName,
@@ -64,6 +151,7 @@ export class GenerateProcessor {
         hasAuthModule: true,
         pluralize,
         snakeCase,
+        camelCase,
         // ...any more
       };
 
@@ -366,11 +454,16 @@ export class GenerateProcessor {
                 field.relation.joinColumn?.referencedColumnName ===
                   primaryFields?.[0]?.name
               ) {
-                joinColumnBlock = `{ name: '${field.relation.joinColumn?.name || dbTableName + '_id'}', referencedColumnName: '${primaryFields?.[0]?.name || 'id'}' }`;
+                joinColumnBlock = `{ name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}',
+                 referencedColumnName: '${primaryFields?.[0]?.name || 'id'}' }`;
               } else {
                 let nameBlock = ``;
 
-                nameBlock = `name: '${field.relation.joinColumn?.name || dbTableName + '_id'}',`;
+                console.log(
+                  `name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}',`,
+                  'colName2',
+                );
+                nameBlock = `name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}',`;
 
                 joinColumnBlock = ` { ${nameBlock}
                     referencedColumnName: '${primaryFields?.[0]?.name || 'id'}',
@@ -384,7 +477,7 @@ export class GenerateProcessor {
               );
               propertyBlock = `@ManyToOne(() => ${name}, (${fileName}) => ${fileName}.${field.name} ${options.length ? `, {\n  ${options.join(',\n  ')}\n}` : ''})
               @JoinColumn( ${joinColumnBlock} ) ${inverseName}: ${name};
-              @Column({ name: '${field.relation.joinColumn?.name || dbTableName + '_id'}', type: ${typeBlock}, nullable: true })
+              @Column({ name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}', type: ${typeBlock}, nullable: true })
               ${inverseName}Id?: ${type};`;
             }
           } else if (field.relation.type == 'ManyToOne') {
@@ -491,7 +584,12 @@ export class GenerateProcessor {
               );
               // const match = regex.exec(originalContent);
               const classMatch = originalContent.match(regex);
-
+              if (!classMatch) {
+                console.warn(
+                  `[injectProperties] Class match not found for ${classType}${moduleClass}BodyReqDto`,
+                );
+                return;
+              }
               const matchIndex = originalContent.indexOf(classMatch[0]);
               const openBraceIndex = originalContent.indexOf('{', matchIndex);
 
@@ -520,12 +618,31 @@ export class GenerateProcessor {
                   const type = oneToManyForeignKeyDtypes[i];
                   let typeDecorator = '@IsString()';
                   if (type === 'bigint') {
-                    typeDecorator =
-                      '@IsString()\n  @Matches(/^\\d+$/, { message: "ID must be a string of digits"})';
+                    typeDecorator = ` @ApiProperty({
+                        example: '9223372036854775807',
+                        description: 'BigInt primary key field (as string)',
+                        type: 'string',
+                      })
+                      @IsString()\n  
+                      @Matches(/^\\d+$/, { message: "ID must be a string of digits"})`;
                   } else if (type === 'uuid') {
-                    typeDecorator = '@IsUUID()';
+                    typeDecorator = `@IsUUID()
+                      @ApiProperty({
+                      example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+                      description: 'UUID primary key field',
+                      type: 'string',
+                      format: 'uuid',
+                      })`;
                   } else if (type === 'int') {
-                    typeDecorator = '@Type(() => Number)\n  @IsInt()';
+                    typeDecorator = `
+                    @Type(() => Number)  
+                    @ApiProperty({
+                      example: 123,
+                      description: 'Integer primary key',
+                      type: 'integer',
+                      format: 'int32',
+                    })
+                      @IsInt()`;
                   }
 
                   return `
@@ -599,6 +716,28 @@ export class GenerateProcessor {
                 @Post('modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}')
                 @HttpCode(HttpStatus.OK)
                 @PermissionDecorator(${moduleName}PermissionsConstant.ADMIN_${moduleName.toUpperCase()}_CREATE)
+                  @ApiOperation({ summary: 'Modify ${field.name.charAt(0).toUpperCase() + field.name.slice(1)} (connect/disconnect IDs)' })
+                  @ApiExtraModels(MultiplePrimaryKeys${className}Dto)
+                  @ApiBody({
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        connectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
+                        disconnectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
+                      },
+                    },
+                  })
+                  @ApiResponse({
+                    status: 200,
+                    description: 'modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}updated successfully.',
+                    schema: {
+                      example: {
+                        statusCode: 200,
+                        message: 'Modified ${field.name.charAt(0).toUpperCase() + field.name.slice(1)}  successfully.',
+                        data: { isAdded: true },
+                      },
+                    },
+                  })
                 async modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}(
                   @Body('connectIds') connectIds: MultiplePrimaryKeys${className}Dto,
                   @Body('disconnectIds') disconnectIds: MultiplePrimaryKeys${className}Dto,
@@ -851,7 +990,7 @@ export class GenerateProcessor {
         },
       );
       execSync('npm run seed:config');
-      execSync('npm run seed:run');
+      execSync(`npm run seed:run -- -- seed=${className}Seeder`);
 
       console.log('Job processed successfully:', job.id);
       await job.moveToCompleted('done', true);

@@ -24,7 +24,8 @@
     "migration:run": "npx typeorm-ts-node-commonjs migration:run -d dist/src/data-source.js",
     "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d dist/src/data-source.js",
     "seed:config": "ts-node ./node_modules/typeorm-seeding/dist/cli.js config -n ormconfig.ts",
-    "seed:run": "npx ts-node ./node_modules/typeorm-seeding/dist/cli.js seed -n ormconfig.ts"
+    "seed:run": "npx ts-node ./node_modules/typeorm-seeding/dist/cli.js seed -n ormconfig.ts",
+    "seed:down": "ts-node src/db/seeder-manager.ts down"
   },
   "dependencies": {
     "@codegenie/serverless-express": "^4.14.1",

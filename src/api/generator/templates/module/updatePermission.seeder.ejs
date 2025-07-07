@@ -4,7 +4,7 @@ import { Permission } from '../../api/permission/entities/permission.entity';
 import { Role } from '../../api/role/entities/role.entity';
 import { <%= camelName %>PermissionsConstant } from '../../api/<%= fileName %>/constants/permission.constant';
 
-export default class <%= className %> implements Seeder {
+export default class <%= className %>Seeder implements Seeder {
   public async run(factory: Factory, dataSource: DataSource): Promise<void> {
     const permissionRepo = dataSource.getRepository(Permission);
     const roleRepo = dataSource.getRepository(Role);
@@ -48,5 +48,36 @@ export default class <%= className %> implements Seeder {
     }
 
     console.log('Completed seeding for <%= name %>');
+  }
+
+  public async down(factory: Factory, dataSource: DataSource): Promise<void> {
+    const permissionRepo = dataSource.getRepository(Permission);
+    const roleRepo = dataSource.getRepository(Role);
+
+    const slugs = Object.values(<%= camelName %>PermissionsConstant);
+
+    const role = await roleRepo.findOne({ where: { name: 'Super Admin' } });
+    if (!role) {
+      console.error('Role "Super Admin" not found!');
+      return;
+    }
+
+    const savedPermissions = await permissionRepo.find({
+      where: slugs.map((slug) => ({ slug })),
+      select: ['id', 'slug'],
+    });
+
+    const permissionIds = savedPermissions.map((p) => p.id);
+
+    if (permissionIds.length > 0) {
+      await dataSource.query(
+        `DELETE FROM role_permission_map WHERE role_id = ? AND permission_id IN (${permissionIds.map(() => '?').join(',')})`,
+        [role.id, ...permissionIds],
+      );
+      console.log('Removed permission links from role_permission_map');
+    }
+
+    await permissionRepo.delete(slugs.map((slug) => ({ slug })));
+    console.log(' Deleted <%= name %>-related permissions');
   }
 }

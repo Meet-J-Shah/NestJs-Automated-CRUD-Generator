@@ -1,28 +1,50 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
-    IsNotEmpty,
-    MaxLength,
-    IsString,
-    IsBoolean,
-    IsOptional,
-    IsArray,
-    IsInt,
-    IsIn,
-    Matches ,
-    IsUUID ,
-    ValidateNested,
-  } from 'class-validator';
-  import { Transform, Type } from 'class-transformer'; 
-  import { IntersectionType } from '@nestjs/mapped-types';
+  IsNotEmpty,
+  IsDefined,
+  MaxLength,
+  IsString,
+  IsBoolean,
+  IsObject,
+  ArrayNotEmpty,
+  IsOptional,
+  IsArray,
+  IsInt,
+  IsIn,
+  Matches,
+  IsUUID,
+  ValidateNested,
+  IsEmail,
+  Min,
+  Max,
+  IsISO8601,
+  IsPhoneNumber,
+} from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { Transform, Type } from 'class-transformer';
+import { IntersectionType } from '@nestjs/mapped-types';
+import { IsDynamicPassword } from '../../../validators/passwordVail.validator';
+
+<% if (fields.some(field => field.relation)) { %>
+  <% const importedRelations = new Set(); %>
+  <% fields.forEach(field => {
+    if (field.relation && !importedRelations.has(field.relation.target)) {
+      importedRelations.add(field.relation.target);
+  %>
+  import { <%= field.relation.target %>ResponseDto } from '../../<%= field.relation.target.toLowerCase() %>/dto/<%= field.relation.target.toLowerCase() %>.dto';
+  <% } }); %>
+<% } %>
 
   
   export class FindMany<%= className %>QueryReq {
     @IsInt()
     @Transform(({ value }) => Number.parseInt(value))
+    @ApiProperty({ example: 1, description: 'Page number for pagination' })
     page: number;
   
     @IsInt()
     @Transform(({ value }) => Number.parseInt(value))
+    @ApiProperty({ example: 10, description: 'Number of items per page' })
     limit: number;
   }
   
@@ -32,13 +54,30 @@ import {
       <%  if (primaryFields && primaryFields.length > 1) { %>
         <% primaryFields.forEach(field => { %>
             <% if (field.dtype === 'uuid') { %>
+              @ApiProperty({
+                example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+                description: 'UUID primary key field',
+                type: 'string',
+                format: 'uuid',
+              })
               @IsUUID()
             <% } else if ( field.dtype === 'int') { %>
                 @Type(() => Number)
                 @IsInt()
+                @ApiProperty({
+                  example: 123,
+                  description: 'Integer primary key',
+                  type: 'integer',
+                  format: 'int32',
+                })
             <% } else { %>
                 @IsString()
                 @Matches(/^\d+$/, { message: 'ID must be a string of digits' })
+                @ApiProperty({
+                  example: '9223372036854775807',
+                  description: 'BigInt primary key field (as string)',
+                  type: 'string',
+                })
             <% } %>
               @IsNotEmpty()
             <%= field.name %>: <%= field.tsType || field.type || 'string' %>;
@@ -48,18 +87,40 @@ import {
         <% if (primaryFields && primaryFields.length === 1) { %>
           <% if (primaryFields[0].dtype === 'uuid') { %>
             @IsUUID()
+            @ApiProperty({
+              example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+              description: 'UUID primary key field',
+              type: 'string',
+              format: 'uuid',
+            })
           <% } else if (primaryFields[0].dtype === 'int') { %>
             @Type(() => Number)
             @IsInt()
+            @ApiProperty({
+              example: 123,
+              description: 'Integer primary key',
+              type: 'integer',
+              format: 'int32',
+            })
           <% } else { %>
-            @IsString()
+              @IsString()
               @Matches(/^\d+$/, { message: 'ID must be a string of digits' })
+              @ApiProperty({
+                example: '9223372036854775807',
+                description: 'BigInt primary key field (as string)',
+                type: 'string',
+              })
           <% } %>
           @IsNotEmpty()
           <%= primaryFields[0].name %>: <%= primaryFields[0].tsType || primaryFields[0].type || 'string' %>;
           <% } else { %>
             @IsString()
             @Matches(/^\d+$/, { message: 'ID must be a string of digits' })
+            @ApiProperty({
+              example: '9223372036854775807',
+              description: 'BigInt primary key field (as string)',
+              type: 'string',
+            })
             @IsNotEmpty()
             id: string;
           <% } %>
@@ -68,6 +129,10 @@ import {
     export class MultiplePrimaryKeys<%=className %>Dto {
       @ValidateNested({ each: true })
       @Type(() => PrimaryKeys<%= className %>Dto)
+      @ApiProperty({
+        type: [PrimaryKeys<%= className %>Dto],
+        description: 'Array of primary keys for bulk actions',
+      })
       items: PrimaryKeys<%= className %>Dto[];
     }
   export class Create<%= className %>BodyReqDto 
@@ -76,110 +141,809 @@ import {
     <% } %>
   {
     <% fields.forEach(field => { %>
-      <% if (field.apiProperty) { %>
-      @ApiProperty()
-      <% } %>
+
     
       <% if (field.relation) { %>
         <% if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %> 
           @IsOptional()
           @IsString()
+          @ApiProperty({
+            example: '9223372036854775807',
+            description: 'BigInt foreign key field (as string)',
+            type: 'string',
+            required: <%= !field.nullable  %>,
+          })
           <%= field.name %>Id?: string;
         <% } else { %>
           @IsOptional()
           @IsArray()
           @IsString({ each: true })
+          @ApiProperty({
+            example: ['9223372036854775807', '9223372036854775806'],
+            description: 'Array of BigInt foreign keys (each as string)',
+            type: 'array',
+            items: {
+              type: 'string',
+              example: '9223372036854775807',
+              description: 'Each item is a BigInt foreign key string',
+            },
+            required: <%= !field.nullable %>,
+          })
           <%= pluralize.singular(field.name) %>Ids?: string[];
         <% } %>
     
       <% } else { %>
-        <% if (field.type === 'string') { %>
-        @IsString()
-        <% } else if (field.type === 'boolean') { %>
-        @IsBoolean()
-        <% } else if (field.type === 'number' || field.type === 'int') { %>
-        @IsInt()
-        <% } else if (field.type === 'array') { %>
-        @IsArray()
+        <% if (field.Type === 'String' || field.Type==='Text') { %>
+          @IsString()
+   
+
+          <%  if(field.Type==='String') {%>
+              <% if (field.default) { %>
+              @Transform(({ value }) => value || <%=field.default%>)
+              <% } %>
+              @ApiProperty({
+                type: String,
+                description: 'A short string with length constraints',
+                example: 'username123',
+                <% if (field.default) { %>
+                  default: '<%=field.default%>',
+                <% } %>
+                required:  <%= !field.nullable %>,
+                maxLength: <%= field.length || 255 %>,
+              })
+              @MaxLength(<%= field.length || 255 %>)
+          <% } else if (field.Type === 'Text') { %>
+              <% if (field.subTypeOptions.subType==='tinytext') { %>
+                @ApiProperty({
+                  type: String,
+                  description: 'A short text with length constraints',
+                  example: 'This is a tiny text',
+                  <% if (field.default) { %>
+                    default: '<%=field.default%>',
+                  <% } %>
+                  required:  <%= !field.nullable %>,
+                  maxLength: <%= field.length || 255 %>,
+                })
+               @ MaxLength(<%= field.length || 255 %>)
+              <% }else if (field.subTypeOptions.subType==='text') { %>
+                @ApiProperty({
+                  type: String,
+                  description: 'A  text with length constraints',
+                  example: 'This is a medium text',
+                  <% if (field.default) { %>
+                    default: '<%=field.default%>',
+                  <% } %>
+                  required: <%= !field.nullable %>,
+                  maxLength: <%= field.length || 65535 %>,
+                })
+               @ MaxLength(<%= field.length || 65535 %>)
+              <%} else if (field.subTypeOptions.subType==='mediumtext') { %>
+                @ApiProperty({
+                  type: String,
+                  description: 'A medium text with length constraints',
+                  example: 'This is a long text that can be very lengthy',
+                  <% if (field.default) { %>
+                    default: '<%=field.default%>',
+                  <% } %>
+                  required:  <%= !field.nullable %>,
+                  maxLength: <%= field.length ||16777215 %>,
+                })
+                  @MaxLength(<%= field.length ||16777215 %>) 
+              <% } else {%>
+                  @MaxLength(<%= field.length ||65535 %>)
+              <% } %>
+          <% } %>
+
+        <% } else if (field.Type === 'Boolean') { %>
+          <% if (field.default){ %>
+          @Transform(({ value }) => value || <%=field.default%>)
+          <% } %>
+          @ApiProperty({
+            type: Boolean,
+            description: 'A boolean value',
+            example: true,
+            <% if (field.default) { %>
+              default: <%=field.default%>,
+            <% } %>
+            required: !! <%= !field.nullable %>,
+          })
+          @IsBoolean()
+        <% } else if (field.Type === 'Json') { %>
+          @Transform(({ value }) => {
+            try {
+              return typeof value === 'string' ? JSON.parse(value) : value;
+            } catch {
+              return {};
+            }
+          })
+          @ApiProperty({
+            type: 'object',
+            description: 'JSON object containing arbitrary key-value pairs',
+            example: { key: 'value' },
+            required:  <%= !field.nullable %>,
+          })
+          @IsObject()
+        <% } else if (field.Type === 'Uid') { %>
+          <% if (field.subTypeOptions.subType==='uuid') { %>
+            @ApiProperty({
+              type: String,
+              description: 'UUID field',
+              example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+              required:  <%= !field.nullable %>,
+            })
+            @IsUUID() 
+          <% } else if (field.subTypeOptions.subType==='bigint') { %>
+            @ApiProperty({
+              type: String,
+              description: 'BigInt field (as string)',
+              example: '9223372036854775807',
+              required:  <%= !field.nullable %>,
+            })
+            @IsString()
+            @Matches(/^\d+$/, { message: 'ID must be a string of digits' })
+          <% } else if (field.subTypeOptions.subType==='string') {%>
+            @ApiProperty({
+              type: String,
+              description: 'Unique String field',
+              example: 'example-string',
+              required:  <%= !field.nullable %>,
+            })
+            @IsString()
+          <% } %>
+        <% } else if (field.Type === 'DateTime') { %>
+          <% if (['date', 'datetime', 'timestamp'].includes(field.subTypeOptions.subType)) { %> 
+            @ApiProperty({
+              type: String,
+              <% if (field.subTypeOptions.subType === 'date') { %>
+                format: 'date',
+                description: 'Date in YYYY-MM-DD format',
+                example: '2025-07-02',
+              <% } else if (field.subTypeOptions.subType === 'datetime') { %>
+                format: 'date-time',
+                description: 'Datetime in ISO 8601 format',
+                example: '2025-07-02T14:30:00Z',
+              <% } else if (field.subTypeOptions.subType === 'timestamp') { %>
+                format: 'date-time',
+                description: 'Timestamp including timezone info (ISO 8601)',
+                example: '2025-07-02T14:30:00+05:30',
+              <% } %>      
+              required:  <%= !field.nullable %>,
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+            }) 
+            <% if(field.default){ %>
+              @Transform(({ value }) => (value ? new Date(value) : undefined))
+            <% }else {%>
+              @Transform(({ value }) => value ?? new Date().toISOString())
+            <% } %>
+            @IsISO8601()
+          <% } else if(field.subTypeOptions.subType === 'time') { %>
+            @ApiProperty({
+              type: String,
+              description: 'Time field',
+              example: '00:00:00',
+              format: 'time',
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+              required:  <%= !field.nullable %>,
+            })
+            @IsString()
+            <% if(field.default){ %>
+              @Transform(({ value }) => value ?? '00:00:00')
+            <% } %>
+            @Matches(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/, {
+              message: 'Time must be in HH:mm:ss format',
+            })
+          <% } %>
+        <% } else if (field.Type === 'Number') { %>
+          <% if (field.default) { %>
+            @Transform(({ value }) => value || <%=field.default%>)
+          <% } %>
+          <% if(field.subTypeOptions.subType === 'smallint') {%>
+            @ApiProperty({
+              type: Number,
+              description: 'Small integer value (e.g., 16-bit)',
+              example: 25,
+              minimum: -32768,
+              maximum: 32767,
+              <% if (field.default) { %>
+                default: <%=field.default%>,
+              <% } %>
+              required:  <%= !field.nullable %>,
+            })
+            @IsInt()
+            @Min(-32768)
+            @Max(32767)
+          <% } else if (field.subTypeOptions.subType === 'int') { %>
+            @ApiProperty({
+              type: Number,
+              description: 'Standard 32-bit integer',
+              example: 1234,
+              <% if (field.default) { %>
+                default: <%=field.default%>,
+              <% } %>
+              required:  <%= !field.nullable %>,
+            })
+            @IsInt()
+            @Min(-2147483648)
+            @Max(2147483647)
+          <% } else if (field.subTypeOptions.subType === 'bigint') { %>
+            @ApiProperty({
+              type: String,
+              description: 'BigInt field (as string)',
+              example: '9223372036854775807',
+              required:  <%= !field.nullable %>,
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+            })
+            @IsString()
+            @Matches(/^-?\d+$/, { message: 'Must be a valid bigint string' })
+          <% } else if (field.subTypeOptions.subType === 'float'|| field.subTypeOptions.subType === 'double') { %>
+            @ApiProperty({
+              type: Number,
+              <% if(field.subTypeOptions.subType==='float') {%>
+                format: 'float',
+                description: 'Single-precision float (32-bit)',
+                example: 12.34,
+                <% } else if (field.subTypeOptions.subType === 'double') { %>
+                format: 'double',
+                description: 'Double-precision float (64-bit)',
+                example: 12345.6789,
+                <% } %>
+                <% if (field.default) { %><%=field.default%><% } %>
+                required:  <%= !field.nullable %>,
+            })
+            @IsNumber({ maxDecimalPlaces: 8 }) 
+          <% } else if (field.subTypeOptions.subType === 'decimal') { %>
+            <%  const P=field.subTypeOptions.m||10; 
+                const S=field.subTypeOptions.d||2; 
+            %>
+            @ApiProperty({
+              type: String,
+              description: 'Decimal value represented as string (high precision) Please use decimal with up to <%=P-S%> digits before and <%=S%> digits after the dot',
+              example: '12345.67',
+              required:  <%= !field.nullable %>,
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+            })
+            @IsString()
+            @Matches(/^\d{1,<%=P-S%>}(\.\d{1,<%=S%>})?$/, {
+              message: 'Must be a decimal with up to <%=P-S%> digits before and <%=S%> digits after the dot',
+            })
+          <% } %>
+          <% } else if (field.Type === 'Email') { %>
+            @ApiProperty({
+              type: String,
+              format: 'email',
+              description: 'Valid email address',
+              example: 'user@example.com',
+              <% if (field.default) { %>
+              default: '<%= field.default %>', 
+              <% } %>
+              required: <%= !field.nullable %>,
+            })
+            <% if (field.default) { %>
+              @Transform(({ value }) => value || "<%=field.default%>")
+            <% } %>
+            @IsEmail({}, { message: 'Invalid email address' })
+          <% } else if (field.Type === 'Password') { %>
+            @ApiProperty({
+              type: String,
+              format: 'password',
+              description: `Password with  one lowercase, one uppercase,
+              <% if (field.subTypeOptions.Numeric) { %>  at least one Numeric <% } %>
+              <% if (field.subTypeOptions.specialCharaters) { %> at least one special character <% } %> with length constraints`,
+              example: 'P@ssw0rd123',
+              <% if (field.default) {%>  
+                default: '<%= field.default %>', 
+              <% } %>
+              required: <%= !field.nullable %>,
+              minLength: <%= field.subTypeOptions.minLength || 6 %>,
+              maxLength: <%= field.subTypeOptions.maxLength || 20 %>,
+            })
+            <% if (field.default) { %>
+              @Transform(({ value }) => value || "<%=field.default%>")
+            <% } %>
+            @IsDynamicPassword({
+              minLength: <%= field.subTypeOptions.minLength || 6  %>,
+              maxLength: <%= field.subTypeOptions.maxLength || 20  %>,
+              Numeric: <%= field.subTypeOptions.Numeric ?? true  %>,
+              specialCharaters: <%= field.subTypeOptions.specialCharaters ?? true  %>,
+            })
+          <% } else if (field.Type === 'PhoneNumber') { %>
+            @ApiProperty({
+              type: String,
+              <% if (field.subTypeOptions.subType === 'localPhoneNumber') { %>
+                description: 'Indian phone number in 10-digit local format',
+                example: '9876543210',
+              <% } else{ %>
+                description: 'Phone number in valid international format (E.164)',
+                example: '+919876543210',
+              <% } %>
+
+              <% if (field.default) { %>
+              default: '<%= field.default %>',
+              <% } %>
+              required: <%= !field.nullable %>,
+            })
+            <% if (field.default) { %>
+              @Transform(({ value }) => value || "<%=field.default%>")
+            <% } %>
+            <% if(field.subTypeOptions.subType === 'localPhoneNumber') {%> 
+              @IsPhoneNumber('IN', { message: 'Invalid Indian phone number' })
+            <% } else if (field.subTypeOptions.subType === 'internationalPhoneNumber') { %>
+              @IsPhoneNumber(null, {
+                message: 'Phone number must be in valid international format (E.164)',
+              })
+            <% } %>
+          <% } %>
+
+  
+
+        <% if (field.nullable) { %>
+          @IsOptional()
+        <% } else { %>
+          @IsDefined()
+          @IsNotEmpty()
+          <% } %>  
+        <% if (field.enum) { %>
+            <% if(field.Type==='Enum') {%>
+              @ApiProperty({
+                enum: <%- JSON.stringify(field.enum) %>,
+                description: 'Allowed values for this enum field',
+                example: '<%- field.enum[0] %>', 
+                <% if (field.default) { %>
+                  default: '<%= field.default %>', 
+                <% } %>
+                required: <%= !field.nullable %>,
+              })
+              <% if (field.default){ %>
+                @Transform(({ value }) => value || "<%=field.default%>")
+                <% } %>
+            @IsIn(<%- JSON.stringify(field.enum) %>)
+            <%= field.name %><% if (field.nullable) { %>?<% } %>: <%- field.enum.map(v => `'${v}'`).join(' | ') %>;
+            <% } else if (field.Type === 'Set') { %>
+              @ApiProperty({
+                type: [String],
+                enum: <%- JSON.stringify(field.enum) %>,
+                isArray: true,
+                description: 'Array of allowed values for this set field',
+                example: [<%- field.enum.slice(0, 2).map(v => `'${v}'`).join(', ') %>], 
+                <% if (field.default) { %>
+                default: <%- JSON.stringify(field.default) %>, 
+                <% } %>
+                required: <%= !field.nullable %>,
+              })
+              <% if (field.default){ %>
+                @Transform(({ value }) => value ?? [<%- JSON.stringify(field.default) %>])
+              <% } %>
+              @IsArray()
+              @ArrayNotEmpty()
+              @IsIn(<%- JSON.stringify(field.enum) %>, {
+                each: true,
+              })
+              <%= field.name %><% if (field.nullable) { %>?<% } %>: (<%- field.enum.map(v => `'${v}'`).join(' | ') %>)[];
+            <% }%>
 
         <% } else { %>
-        @IsNotEmpty()
-        <% } %>
-    
-        <% if (field.maxLength) { %>
-        @MaxLength(<%= field.maxLength %>)
-        <% } %>
-       
-    
-        <% if (!field.nullable) { %>
-          @IsOptional()
-          <% if (field.enum) { %>
-            @IsIn(<%- JSON.stringify(field.enum) %>)
-            <%= field.name %>?: <%- field.enum.map(v => `'${v}'`).join(' | ') %>;
-          <% } else { %>
-              <%= field.name %>?: <%= field.tsType || field.type %>;
-          <% } %>
-        <% } else { %>
-          <% if (field.enum) { %>
-            @IsIn(<%- JSON.stringify(field.enum) %>)
-            <%= field.name %>: <%- field.enum.map(v => `'${v}'`).join(' | ') %>;
-          <% } else { %>
-              <%= field.name %>: <%= field.tsType || field.type %>;
-          <% } %>          
-        <% } %>
-      <% } %>
+              <%= field.name %> <% if (field.nullable) { %>?<% } %>: <%- field.tsType || field.type %>;
+        <% } %>          
+        
+      <% } %>  
     <% }) %>
       
   }
   
   export class Update<%= className %>BodyReqDto {
     <% fields.forEach(field => { %>
-      <% if (field.apiProperty) { %>
-      @ApiProperty()
-      <% } %>
+
     
       <% if (field.relation) { %>
         <% if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %> 
           @IsOptional()
           @IsString()
+          @ApiProperty({
+            example: '9223372036854775807',
+            description: 'BigInt foreign key field (as string)',
+            type: 'string',
+            required: false,
+          })
           <%= field.name %>Id?: string;
         <% } else { %>
           @IsOptional()
           @IsArray()
           @IsString({ each: true })
+          @ApiProperty({
+            example: ['9223372036854775807', '9223372036854775806'],
+            description: 'Array of BigInt foreign keys (each as string)',
+            type: 'array',
+            items: {
+              type: 'string',
+              example: '9223372036854775807',
+              description: 'Each item is a BigInt foreign key string',
+            },
+            required: false,
+          })
           <%= pluralize.singular(field.name) %>Ids?: string[];
         <% } %>
     
       <% } else { %>
-        <% if (field.type === 'string') { %>
-        @IsString()
-        <% } else if (field.type === 'boolean') { %>
-        @IsBoolean()
-        <% } else if (field.type === 'number' || field.type === 'int') { %>
-        @IsInt()
-        <% } else if (field.type === 'array') { %>
-        @IsArray()
-    
-    
+        <% if (field.Type === 'String' || field.Type==='Text') { %>
+          @IsString()
+   
 
- 
+          <%  if(field.Type==='String') {%>
+              <% if (field.default) { %>
+              @Transform(({ value }) => value || <%=field.default%>)
+              <% } %>
+              @ApiProperty({
+                type: String,
+                description: 'A short string with length constraints',
+                example: 'username123',
+                <% if (field.default) { %>
+                  default: '<%=field.default%>',
+                <% } %>
+                required: false,
+                maxLength: <%= field.length || 255 %>,
+              })
+              @MaxLength(<%= field.length || 255 %>)
+          <% } else if (field.Type === 'Text') { %>
+              <% if (field.subTypeOptions.subType==='tinytext') { %>
+                @ApiProperty({
+                  type: String,
+                  description: 'A short text with length constraints',
+                  example: 'This is a tiny text',
+                  <% if (field.default) { %>
+                    default: '<%=field.default%>',
+                  <% } %>
+                  required: false,
+                  maxLength: <%= field.length || 255 %>,
+                })
+               @ MaxLength(<%= field.length || 255 %>)
+              <% }else if (field.subTypeOptions.subType==='text') { %>
+                @ ApiProperty({
+                  type: String,
+                  description: 'A  text with length constraints',
+                  example: 'This is a medium text',
+                  <% if (field.default) { %>
+                    default: '<%=field.default%>',
+                  <% } %>
+                  required: false,
+                  maxLength: <%= field.length || 65535 %>,
+                })
+               @MaxLength(<%= field.length || 65535 %>)
+              <%} else if (field.subTypeOptions.subType==='mediumtext') { %>
+                @ ApiProperty({
+                  type: String,
+                  description: 'A medium text with length constraints',
+                  example: 'This is a long text that can be very lengthy',
+                  <% if (field.default) { %>
+                    default: '<%=field.default%>',
+                  <% } %>
+                  required: false,
+                  maxLength: <%= field.length ||16777215 %>,
+                })
+                  @MaxLength(<%= field.length ||16777215 %>) 
+              <% } else {%>
+                  @MaxLength(<%= field.length ||65535 %>)
+              <% } %>
+          <% } %>
+
+        <% } else if (field.Type === 'Boolean') { %>
+          <% if (field.default){ %>
+          @Transform(({ value }) => value || <%=field.default%>)
+          <% } %>
+          @ApiProperty({
+            type: Boolean,
+            description: 'A boolean value',
+            example: true,
+            <% if (field.default) { %>
+              default: <%=field.default%>,
+            <% } %>
+            required: false,
+          })
+          @IsBoolean()
+        <% } else if (field.Type === 'Json') { %>
+          @Transform(({ value }) => {
+            try {
+              return typeof value === 'string' ? JSON.parse(value) : value;
+            } catch {
+              return {};
+            }
+          })
+          @ApiProperty({
+            type: 'object',
+            description: 'JSON object containing arbitrary key-value pairs',
+            example: { key: 'value' },
+            required: false,
+          })
+          @IsObject()
+        <% } else if (field.Type === 'Uid') { %>
+          <% if (field.subTypeOptions.subType==='uuid') { %>
+            @ApiProperty({
+              type: String,
+              description: 'UUID field',
+              example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+              required: false,
+            })
+            @IsUUID() 
+          <% } else if (field.subTypeOptions.subType==='bigint') { %>
+            @ApiProperty({
+              type: String,
+              description: 'BigInt field (as string)',
+              example: '9223372036854775807',
+              required: false,
+            })
+            @IsString()
+            @Matches(/^\d+$/, { message: 'ID must be a string of digits' })
+          <% } else if (field.subTypeOptions.subType==='string') {%>
+            @ApiProperty({
+              type: String,
+              description: 'Unique String field',
+              example: 'example-string',
+              required: false,
+            })
+            @IsString()
+          <% } %>
+        <% } else if (field.Type === 'DateTime') { %>
+          <% if (['date', 'datetime', 'timestamp'].includes(field.subTypeOptions.subType)) { %>
+            @ApiProperty({
+              type: String,
+              <% if (field.subTypeOptions.subType === 'date') { %>
+                format: 'date',
+                description: 'Date in YYYY-MM-DD format',
+                example: '2025-07-02',
+              <% } else if (field.subTypeOptions.subType === 'datetime') { %>
+                format: 'date-time',
+                description: 'Datetime in ISO 8601 format',
+                example: '2025-07-02T14:30:00Z',
+              <% } else if (field.subTypeOptions.subType === 'timestamp') { %>
+                format: 'date-time',
+                description: 'Timestamp including timezone info (ISO 8601)',
+                example: '2025-07-02T14:30:00+05:30',
+              <% } %>      
+              required: false,
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+            }) 
+            <% if(field.default){ %>
+              @Transform(({ value }) => (value ? new Date(value) : undefined))
+            <% }else {%>
+              @Transform(({ value }) => value ?? new Date().toISOString())
+            <% } %>
+            @IsISO8601()
+          <% } else if(field.subTypeOptions.subType === 'time') { %>
+            @ApiProperty({
+              type: String,
+              description: 'Time field',
+              example: '00:00:00',
+              format: 'time',
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+              required: false,
+            })
+            @IsString()
+            <% if(field.default){ %>
+              @Transform(({ value }) => value ?? '00:00:00')
+            <% } %>
+            @Matches(/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/, {
+              message: 'Time must be in HH:mm:ss format',
+            })
+          <% } %>
+        <% } else if (field.Type === 'Number') { %>
+          <% if (field.default) { %>
+            @Transform(({ value }) => value || <%=field.default%>)
+          <% } %>
+          <% if(field.subTypeOptions.subType === 'smallint') {%>
+            @ApiProperty({
+              type: Number,
+              description: 'Small integer value (e.g., 16-bit)',
+              example: 25,
+              minimum: -32768,
+              maximum: 32767,
+              <% if (field.default) { %>
+                default: <%=field.default%>,
+              <% } %>
+              required: false,
+            })            
+            @IsInt()
+            @Min(-32768)
+            @Max(32767)
+          <% } else if (field.subTypeOptions.subType === 'int') { %>
+            @ApiProperty({
+              type: Number,
+              description: 'Standard 32-bit integer',
+              example: 1234,
+              <% if (field.default) { %>
+                default: <%=field.default%>,
+              <% } %>
+              required: false,
+            })
+            @IsInt()
+            @Min(-2147483648)
+            @Max(2147483647)
+          <% } else if (field.subTypeOptions.subType === 'bigint') { %>
+            @ApiProperty({
+              type: String,
+              description: 'BigInt field (as string)',
+              example: '9223372036854775807',
+              required: false,
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+            })
+            @IsString()
+            @Matches(/^-?\d+$/, { message: 'Must be a valid bigint string' })
+          <% } else if (field.subTypeOptions.subType === 'float'|| field.subTypeOptions.subType === 'double') { %>
+            @ApiProperty({
+              type: Number,
+              <% if(field.subTypeOptions.subType==='float') {%>
+                format: 'float',
+                description: 'Single-precision float (32-bit)',
+                example: 12.34,
+                <% } else if (field.subTypeOptions.subType === 'double') { %>
+                format: 'double',
+                description: 'Double-precision float (64-bit)',
+                example: 12345.6789,
+                <% } %>
+                <% if (field.default) { %><%=field.default%><% } %>
+                required: false,
+            })
+            @IsNumber({ maxDecimalPlaces: 8 }) 
+          <% } else if (field.subTypeOptions.subType === 'decimal') { %>
+            <%  const P=field.subTypeOptions.m||10; 
+                const S=field.subTypeOptions.d||2; 
+            %>
+            @ApiProperty({
+              type: String,
+              description: 'Decimal value represented as string (high precision) Please use decimal with up to <%=P-S%> digits before and <%=S%> digits after the dot',
+              example: '12345.67',
+              required: false,
+              <% if (field.default) { %>
+                default: '<%=field.default%>',
+              <% } %>
+            })
+            @IsString()
+            @Matches(/^\d{1,<%=P-S%>}(\.\d{1,<%=S%>})?$/, {
+              message: 'Must be a decimal with up to <%=P-S%> digits before and <%=S%> digits after the dot',
+            })
+          <% } %>
+          <% } else if (field.Type === 'Email') { %>
+            @ApiProperty({
+              type: String,
+              format: 'email',
+              description: 'Valid email address',
+              example: 'user@example.com',
+              <% if (field.default) { %>
+              default: '<%= field.default %>', 
+              <% } %>
+              required: false,
+            })
+            <% if (field.default) { %>
+              @Transform(({ value }) => value || "<%=field.default%>")
+            <% } %>
+            @IsEmail({}, { message: 'Invalid email address' })
+          <% } else if (field.Type === 'Password') { %>
+            @ApiProperty({
+              type: String,
+              format: 'password',
+              description: `Password with  one lowercase, one uppercase,
+              <% if (field.subTypeOptions.Numeric) { %>  at least one Numeric <% } %>
+              <% if (field.subTypeOptions.specialCharaters) { %> at least one special character <% } %> with length constraints`,
+              example: 'P@ssw0rd123',
+              <% if (field.default) {%>  
+                default: '<%= field.default %>', 
+              <% } %>
+              required: false,
+              minLength: <%= field.subTypeOptions.minLength || 6 %>,
+              maxLength: <%= field.subTypeOptions.maxLength || 20 %>,
+            })
+            <% if (field.default) { %>
+              @Transform(({ value }) => value || "<%=field.default%>")
+            <% } %>
+            @IsDynamicPassword({
+              minLength: <%= field.subTypeOptions.minLength || 6  %>,
+              maxLength: <%= field.subTypeOptions.maxLength || 20  %>,
+              Numeric: <%= field.subTypeOptions.Numeric ?? true  %>,
+              specialCharaters: <%= field.subTypeOptions.specialCharaters ?? true  %>,
+            })
+          <% } else if (field.Type === 'PhoneNumber') { %>
+            @ApiProperty({
+              type: String,
+              <% if (field.subTypeOptions.subType === 'localPhoneNumber') { %>
+                description: 'Indian phone number in 10-digit local format',
+                example: '9876543210',
+              <% } else{ %>
+                description: 'Phone number in valid international format (E.164)',
+                example: '+919876543210',
+              <% } %>
+
+              <% if (field.default) { %>
+              default: '<%= field.default %>',
+              <% } %>
+              required: false,
+            })
+            <% if (field.default) { %>
+              @Transform(({ value }) => value || "<%=field.default%>")
+            <% } %>
+            <% if(field.subTypeOptions.subType === 'localPhoneNumber') {%> 
+              @IsPhoneNumber('IN', { message: 'Invalid Indian phone number' })
+            <% } else if (field.subTypeOptions.subType === 'internationalPhoneNumber') { %>
+              @IsPhoneNumber(null, {
+                message: 'Phone number must be in valid international format (E.164)',
+              })
+            <% } %>
+          <% } %>
+
+  
+
+          @IsOptional()
+         
+        <% if (field.enum) { %>
+            <% if(field.Type==='Enum') {%>
+              @ApiProperty({
+                enum: <%- JSON.stringify(field.enum) %>,
+                description: 'Allowed values for this enum field',
+                example: '<%- field.enum[0] %>', 
+                <% if (field.default) { %>
+                  default: '<%= field.default %>', 
+                <% } %>
+                required: false,
+              })
+              <% if (field.default){ %>
+                @Transform(({ value }) => value || "<%=field.default%>")
+                <% } %>
+            @IsIn(<%- JSON.stringify(field.enum) %>)
+            <%= field.name %>?: <%- field.enum.map(v => `'${v}'`).join(' | ') %>;
+            <% } else if (field.Type === 'Set') { %>
+              @ApiProperty({
+                type: [String],
+                enum: <%- JSON.stringify(field.enum) %>,
+                isArray: true,
+                description: 'Array of allowed values for this set field',
+                example: [<%- field.enum.slice(0, 2).map(v => `'${v}'`).join(', ') %>], 
+                <% if (field.default) { %>
+                default: <%- JSON.stringify(field.default) %>, 
+                <% } %>
+                required: false,
+              })
+              <% if (field.default){ %>
+                @Transform(({ value }) => value ?? [<%- JSON.stringify(field.default) %>])
+              <% } %>
+              @IsArray()
+              @ArrayNotEmpty()
+              @IsIn(<%- JSON.stringify(field.enum) %>, {
+                each: true,
+              })
+              <%= field.name %>?: (<%- field.enum.map(v => `'${v}'`).join(' | ') %>)[];
+            <% }%>
+
         <% } else { %>
-        @IsNotEmpty()
-        <% } %>
-    
-        <% if (field.maxLength) { %>
-        @MaxLength(<%= field.maxLength %>)
-        <% } %>
-        @IsOptional()
-        <%= field.name %>?: <%= field.tsType || field.type %>;
-      <% } %>
+              <%= field.name %>?: <%- field.tsType || field.type %>;
+        <% } %>          
+        
+      <% } %>  
     <% }) %>
+
+
+
   }
   
-  <% if(creationConfig.withSoftDelete) {%>
+  <% if(creationConfig?.withSoftDelete) {%>
     export class Delete<%= className %>BodyReqDto {
       @IsBoolean()
       @IsOptional()
+      @ApiProperty({
+        example: true,
+        description: 'True to soft delete the <%= className %>',
+        required: false,
+      })
       hasSoftDeleted?: boolean;
     }
   <% } %>
@@ -187,6 +951,96 @@ import {
   
   export class UpdateAndDelete<%= className %>BodyReqDto extends IntersectionType(
     Update<%= className %>BodyReqDto,
-    <% if(creationConfig.withSoftDelete) {%>Delete<%= className %>BodyReqDto,<% } %>
+    <% if(creationConfig?.withSoftDelete) {%>Delete<%= className %>BodyReqDto,<% } %>
   ) {}
-  
+
+
+
+export class <%= name %>ResponseDto {
+  <% if (primaryFields && primaryFields.length > 0) { %>
+    <% primaryFields.forEach(field => { %>
+  @ApiProperty({ example: '<%= field.example || 'primary-id' %>' })
+  <%= field.name %>: <%= field.type || 'string' %>;
+    <% }); %>
+  <% } else { %>
+  @ApiProperty({ example: '1' })
+  id: string;
+  <% } %>
+
+  <% fields.forEach(field => {
+      if (field.Type === 'Password' || field.name === 'deletedAt' || field.name === 'deletedBy') return;
+  %>
+    <% if (field.relation) { %>
+      <% if (field.relation.isArray) { %>
+  @ApiProperty({ type: () => [<%= field.relation.target %>ResponseDto], required: false })
+  <%= field.name %>: <%= field.relation.target %>ResponseDto[];
+      <% } else { %>
+  @ApiProperty({ type: () => <%= field.relation.target %>ResponseDto, required: false })
+  <%= field.name %>: <%= field.relation.target %>ResponseDto;
+      <% } %>
+    <% } else { %>
+      <% if (field.dtype === 'enum') { %>
+  @ApiProperty({
+    enum: <%- JSON.stringify(field.enum) %>,
+    example: '<%= field.enum[0] %>',
+  })
+  <%= field.name %>: <%- field.enum.map(v => `'${v}'`).join(' | ') %>;
+      <% } else if (field.dtype === 'simple-array' && field.enum) { %>
+  @ApiProperty({
+    type: [String],
+    enum: <%- JSON.stringify(field.enum) %>,
+    example: [<%- field.enum.slice(0, 2).map(v => `'${v}'`).join(', ') %>],
+  })
+  <%= field.name %>: (<%- field.enum.map(v => `'${v}'`).join(' | ') %>)[];
+      <% } else if (field.dtype === 'decimal') { %>
+  @ApiProperty({
+    type: String,
+    example: '<%= field.default || "12345678.99" %>',
+    description: 'Decimal value<%= field.subTypeOptions?.m ? ` (precision: ${field.subTypeOptions.m}` : "" %><%= field.subTypeOptions?.d ? `, scale: ${field.subTypeOptions.d})` : "" %>',
+  })
+  <%= field.name %>: string;
+      <% } else if (field.dtype === 'json') { %>
+  @ApiProperty({
+    type: 'object',
+    example: { key: 'value' },
+    description: 'JSON data',
+  })
+  <%= field.name %>: Record<string, any>;
+      <% } else if (field.dtype === 'datetime' || field.dtype === 'timestamp') { %>
+  @ApiProperty({ type: String, format: 'date-time', example: '2025-01-01T12:00:00Z' })
+  <%= field.name %>: Date;
+      <% } else if (field.dtype === 'date') { %>
+  @ApiProperty({ type: String, format: 'date', example: '2025-01-01' })
+  <%= field.name %>: string;
+      <% } else if (field.dtype === 'time') { %>
+  @ApiProperty({ type: String, example: '15:30:00' })
+  <%= field.name %>: string;
+      <% } else if (field.dtype === 'boolean') { %>
+  @ApiProperty({ type: Boolean, example: true })
+  <%= field.name %>: boolean;
+      <% } else if (field.dtype === 'int' || field.dtype === 'smallint' || field.dtype === 'bigint') { %>
+  @ApiProperty({ type: Number, example: 123 })
+  <%= field.name %>: number;
+      <% } else { %>
+  @ApiProperty({ type: String, example: '<%= field.default || field.name %>' })
+  <%= field.name %>: string;
+      <% } %>
+    <% } %>
+  <% }); %>
+
+  <% if (creationConfig?.withTimestamps) { %>
+  @ApiProperty({ type: String, format: 'date-time', example: '2024-01-01T12:00:00Z' })
+  createdAt: Date;
+
+  @ApiProperty({ type: String, format: 'date-time', example: '2024-01-02T12:00:00Z' })
+  updatedAt: Date;
+  <% } %>
+
+  <% if (creationConfig?.operator) { %>
+  @ApiProperty({ type: () => UserResponseDto, required: false })
+  createdBy?: UserResponseDto;
+
+  @ApiProperty({ type: () => UserResponseDto, required: false })
+  updatedBy?: UserResponseDto;
+  <% } %>
+}

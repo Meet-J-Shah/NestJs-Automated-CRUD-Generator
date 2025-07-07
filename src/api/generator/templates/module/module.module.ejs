@@ -28,8 +28,8 @@ import { CustomLogger } from 'src/utils/logger/logger.service';
     TypeOrmModule.forFeature([<% Array.from(importedRelations).forEach((rel, i, arr) => { %>
     <%= rel %><%= i < arr.length - 1 ? ',' : '' %>
   <% }) %>]),
-    <% if (hasAuthModule) { %>forwardRef(() => AuthModule),<% } %>
-    <% if (hasUtilsModule) { %>UtilsModule,<% } %>
+  forwardRef(() => AuthModule),
+   UtilsModule,
   ],
   controllers: [<%= className %>Controller],
   providers: [<%= className %>Service,CustomLogger],

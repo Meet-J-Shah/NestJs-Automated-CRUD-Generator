@@ -17,6 +17,9 @@ import {
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import {User} from "../../user/entities/user.entity";
+<% if (indices) { %>
+import { Index } from 'typeorm';
+<% } %>
 <% if (primaryFields && primaryFields[0] && primaryFields[0].dtype === 'uuid') { %>
 import { v4 as uuidv4 } from 'uuid';
 <% } %>
@@ -34,6 +37,17 @@ import { <%= field.relation.target %> } from "../../<%= relationFile %>/entities
 <% }) %>
 
 @Entity()
+<% if(indices && indices.length > 0) { %>
+  <% indices.forEach((Index,index) => { %>
+    @Index( <% if (Index.name) { %>'<%='IDX_'+dbTableName+'_'+index+'_'+ Index.name %>' 
+            <% } else { %>'<%='IDX_'+dbTableName+'_'+index+'_'+ Index.indicesFields.map(camelCase).join('_') %>' 
+            <% }  %>
+            ,<%- JSON.stringify(Index.indicesFieldsEntity) %>
+            <% if (Index.unique) { %>, { unique: true } <% } %>
+          )
+    
+  <% }) %>
+<% } %>
 export class <%= name %> {
   <% const primaryKeys=[]; const primaryDBKeys=[]; const primaryKeyTypes=[]; %>
   <% if (primaryFields) {%>
@@ -186,17 +200,23 @@ export class <%= name %> {
   <% } else { %>
     @Column({
       <% if (field.type) { %>type: '<%= field.dtype %>',<% } %>
-      <% if (field.enum) { %>enum: <%- JSON.stringify(field.enum) %>,<% } %>
+      <% if (field.dtype==='enum' && field.enum) { %>enum: <%- JSON.stringify(field.enum) %>,<% } %>
       <% if (field.dbName) { %>name: '<%= field.dbName %>',<% } else{ %>name: '<%= snakeCase(field.name) %>' <% } %>,
-      <% if (field.length || field.type==='varchar') { %>length: <%= field.length || 255 %>,<% } %>
+      <% if (field.length &&( field.dtype==='char' || field.dtype==='varchar')) { %>length: <%= field.length || 255 %>,<% } %>
+      <% if(field.dtype==='decimal') { %>
+        <% if (field.subTypeOptions.m) { %>precision: <%= field.subTypeOptions.m %>,<% } %>
+        <% if (field.subTypeOptions.d) { %>scale: <%= field.subTypeOptions.d %>,<% } %>
+      <% } %>
       <% if (field.nullable !== undefined) { %>nullable: <%= field.nullable %>,<% } %>
       <% if (field.unique) { %>unique: true,<% } %>
       <% if (field.default !== undefined) { %>default: <%- JSON.stringify(field.default) %>,<% } %>
     })
     <%= field.name %>:
-    <% if (field.enum) { %><%- field.enum.map(v => `'${v}'`).join(' | ') %>
+    <% if (field.enum) { if(field.dtype==='enum'){%><%- field.enum.map(v => `'${v}'`).join(' | ') %>
+    <%} else if(field.dtype==='simple-array') { %>(<%- field.enum.map(v => `'${v}'`).join(' | ') %>)[]
+    <%}%>
     <% } else { %>
-      <%= field.type || field.dtype %>;
+      <%- field.type || field.dtype %>;
      <% } %>
   <% } %>
   
@@ -256,27 +276,32 @@ export class <%= name %> {
 
   static selectFields = {
     id: true,
-<% fields.forEach(field => { if (!field.relation) { %>    <%= field.name %>: true,
-<% }}) %>
-<% if (creationConfig) { %>
-<% if (creationConfig.withTimestamps) { %>    createdAt: true,
-    updatedAt: true,
-<% } %>
-<% if (creationConfig.operator) { %>    createdBy: true,
-    updatedBy: true,
-<% if (creationConfig.withSoftDelete) { %>    // deletedAt is excluded (excluded by @Exclude())
-<% } } %>
+    <% fields.forEach(field => { if (!field.relation) { %>    <%= field.name %>: true,
+      <% }}) %>
+    <% if (creationConfig) { %>
+        <% if (creationConfig.withTimestamps) { %>        
+            createdAt: true,
+            updatedAt: true,
+        <% } %>
+        <% if (creationConfig.operator) { %>    
+            createdBy: true,
+            updatedBy: true,
+            // deletedAt is excluded (excluded by @Exclude())
+        <% } %>
+    <% } %>
   } as const;
 
-  static relationalFields = {
-<% fields.forEach(field => { if (field.relation) { %>    <%= field.name %>: true,
-<% }}) %>
-<% if (creationConfig.operator) { %>    createdBy: true,
-    updatedBy: true,
-<% if (creationConfig.withSoftDelete) { %>    deletedBy: true,
-<% } } %>
+  static relationalFields = 
+  {
+    <% fields.forEach(field =>{ if (field.relation) { %>    <%= field.name %>: true,
+          <% }}) %>
+    <% if (creationConfig) { %>
+      <% if (creationConfig.operator) { %>  
+        createdBy: true,
+        updatedBy: true,
+    <% if (creationConfig.withSoftDelete) { %>    
+      deletedBy: true,
+    <% } } } %>
   } as const;
-<% } %>
-
 
 }

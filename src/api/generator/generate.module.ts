@@ -1,11 +1,13 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bull';
 import { GenerateService } from './generate.service';
 import { GenerateController } from './generate.controller';
 import { GenerateProcessor } from './generate.processor';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
+    forwardRef(() => AuthModule),
     BullModule.forRoot({
       // Add this global configuration
       redis: {

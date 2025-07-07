@@ -1,11 +1,14 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Entity,
   Column,
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  ManyToOne,
   ManyToMany,
   JoinTable,
+  JoinColumn,
 } from 'typeorm';
 
 import { Role } from '../../role/entities/role.entity';

@@ -24,7 +24,7 @@ import { ModelService } from '../../utils/model/model.service';
 import { DeleteRollBackDto } from '../../utils/model/model.dto';
 import { CustomLogger } from 'src/utils/logger/logger.service';
 import {plainToInstance} from 'class-transformer';
-<% if(creationConfig.operator) {%>
+<% if(creationConfig?.operator) {%>
   import { User } from '../user/entities/user.entity';
 <% } %>
 <%
@@ -81,7 +81,7 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
   
     async create(
       createDto:Create<%= entityName %>BodyReqDto,
-      <% if(creationConfig.operator) {%>
+      <% if(creationConfig?.operator) {%>
         createdByUser: User,
       <% } %>
       
@@ -90,7 +90,7 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
   
       const createEntity: <%= entityName %> = this.<%= entityVar %>Repository.create({
         ...createDto,
-        <% if(creationConfig.operator) {%>
+        <% if(creationConfig?.operator) {%>
         createdBy: createdByUser,
         updatedBy: createdByUser,
         <% } %>
@@ -125,14 +125,14 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
     async update(
       updateDto: UpdateAndDelete<%= className %>BodyReqDto,
       primaryKeyFields: PrimaryKeys<%= className %>Dto, 
-        <% if(creationConfig.operator) {%>
+        <% if(creationConfig?.operator) {%>
           updatedByUser: User,
         <% } %>
-        <% if (creationConfig.withSoftDelete) { %>
+        <% if (creationConfig?.withSoftDelete) { %>
       isRollback = false,
       <% } %>
     ): Promise<<%= entityName %>> {
-      <% if (creationConfig.withSoftDelete) { %>
+      <% if (creationConfig?.withSoftDelete) { %>
       const rollbackObj: DeleteRollBackDto = isRollback ? { withDeleted: true } : {};
       <% } %>
       let entity = await this.<%= entityVar %>Repository.findOne({
@@ -145,13 +145,13 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
                     id: primaryKeyFields.id
                   <% } %>
               },
-              <% if (creationConfig.withSoftDelete) { %>
+              <% if (creationConfig?.withSoftDelete) { %>
         ...rollbackObj,
         <% } %>
       });
       if (!entity) throw new BadRequestException('<%= entityName %> not found');
   
-      entity = this.modelService.updateModelValue(entity, updateDto, <% if(creationConfig.operator) {%>
+      entity = this.modelService.updateModelValue(entity, updateDto, <% if(creationConfig?.operator) {%>
         updatedByUser,
       <% } %>);
   
@@ -173,7 +173,7 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
       });
   
       if (!data) throw new BadRequestException('<%= entityName %> not exists');
-      <% if (creationConfig.withSoftDelete) { %>
+      <% if (creationConfig?.withSoftDelete) { %>
       if (!data.deletedAt) throw new BadRequestException('Only soft-deleted records can be deleted');
       <% } %>
       const result = await this.<%= entityVar %>Repository.delete(primaryKeyFields);
@@ -213,8 +213,8 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
                 where: whereConditions,});
             }
            
-
-          if ( <%=field.relation.target.toLowerCase()%>sToRemove?.length !== disconnectIds.items.length) {
+            const disconnectIdsLength= disconnectIds?.items?.length || 0;
+          if ( <%=field.relation.target.toLowerCase()%>sToRemove?.length !== disconnectIdsLength) {
               throw new NotFoundException(' In the disconnectIds  some or all<%=field.relation.target%> not found');
             }
 
@@ -226,8 +226,8 @@ import { syncManyToManyRelation } from '../../utils/relation-utils';
               <%=field.relation.target.toLowerCase()%>sToAdd = await this.<%=field.relation.target.toLowerCase()%>Repository.find({ 
                 where: whereConditionsToAdd,});
             }
-
-          if ( <%=field.relation.target.toLowerCase()%>sToAdd?.length !== connectIds.items.length) {
+            const connectIdsLength= connectIds?.items?.length || 0;
+          if ( <%=field.relation.target.toLowerCase()%>sToAdd?.length !== connectIdsLength) {
               throw new NotFoundException('In the connectIds  some or all <%=field.relation.target%> not found');
             }
               const <%=field.relation.target.toLowerCase()%>Meta = this.<%=field.relation.target.toLowerCase()%>Repository.metadata;

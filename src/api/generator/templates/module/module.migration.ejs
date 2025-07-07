@@ -2,10 +2,16 @@ import {   MigrationInterface,
   QueryRunner,
   Table,
   TableColumn,
-  TableForeignKey } from "typeorm";
+  TableForeignKey,TableIndex, } from "typeorm";
 
 
 export class Create<%= name %>Table<%= timestamp %> implements MigrationInterface {
+  <% 
+    const indicesName = [];
+    const joinTablesNames = [];
+    const entityForeignKeyNames=[];
+    const onetoManyKeyNames=[] ;
+  %>
   public async up(queryRunner: QueryRunner): Promise<void> {
     <% const primaryKeys=[]; const primaryKeyTypes=[]; %>
     await queryRunner.createTable(new Table({
@@ -67,6 +73,10 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
           <% } else if (field.dtype === 'uuid') { %>
             type: "char",
             length: "36",
+          <% }else if(field.dtype==='simple-array'){ %>
+            type: "varchar",
+            length: "255",
+
           <% } else { %>
           type: "<%= field.dtype ||  typeMap[field.type] || 'varchar' %>",
           <% if(field.default) { %>
@@ -79,7 +89,7 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
             <% } %> 
           <% } %>
           <% }  %>
-          <% if (field.length || field.dtype==='varchar' || !field.dtype) { %>length: '<%= field.length || 255 %>',<% } %>
+          <% if (field.length && (field.dtype==='varchar' || !field.dtype)) { %>length: '<%= field.length || 255 %>',<% } %>
           <% if (field.nullable !== undefined) { %>isNullable: <%= field.nullable %>,<% } %>
           <% if (field.unique) { %>isUnique: true,<% } %>
         },
@@ -126,7 +136,7 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
             type: 'bigint',
             isNullable: true,
           },
-        <% if (creationConfig.withSoftDelete) { %>
+        <% if (creationConfig?.withSoftDelete) { %>
           {
             name: 'deleted_by',
             type: 'bigint',
@@ -140,7 +150,8 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
     // Foreign keys
     await queryRunner.createForeignKeys('<%= dbTableName %>', [
     <% if (creationConfig?.operator) { %>  
-       
+       <% entityForeignKeyNames.push('created_by')
+        entityForeignKeyNames.push('updated_by') %>
         new TableForeignKey({
           columnNames: ['created_by'],
           referencedTableName: 'user',
@@ -155,7 +166,8 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
           onDelete: 'SET NULL',
           onUpdate: 'CASCADE',
         }),
-      <% if (creationConfig.withSoftDelete) { %>
+      <% if (creationConfig?.withSoftDelete) { %>
+        <% entityForeignKeyNames.push('deleted_by') %>
         new TableForeignKey({
           columnNames: ['deleted_by'],
           referencedTableName: 'user',
@@ -168,6 +180,7 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
     <% fields.forEach(field => { %>
       <% if (field.relation) { %>
         <% if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %>
+          <% entityForeignKeyNames.push(field.relation.joinColumn?.name ||  snakeCase(field.name)+'_id') %>
           new TableForeignKey({
             columnNames: ['<%= field.relation.joinColumn?.name ||  snakeCase(field.name)+'_id' %>'],
             referencedTableName: '<%= field.relation.target.toLowerCase() %>',
@@ -183,6 +196,7 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
     // Join tables
     <% fields.forEach(field => { %>
       <% if (field.relation && field.relation.type === 'ManyToMany') { %>
+        <% joinTablesNames.push(field.relation.joinTable?.name || name.toLowerCase() + "_" + field.relation.target.toLowerCase() + "_map"); %>
         await queryRunner.createTable(
           new Table({
             name:'<%= field.relation.joinTable?.name || name.toLowerCase() + "_" + field.relation.target.toLowerCase() + "_map"  %>',
@@ -407,12 +421,89 @@ export class Create<%= name %>Table<%= timestamp %> implements MigrationInterfac
           onUpdate: '<%- field.relation.onUpdate ?? 'CASCADE'%>',
           onDelete: '<%- field.relation.onDelete ?? 'SET NULL'%>',
         }));
-        
+        <% if(primaryDBTablefields.length === 0 ) 
+        {
+          onetoManyKeyNames.push([field.relation.target.toLowerCase(),
+          [`${dbTableName}_id`]]);
+        } else {
+          onetoManyKeyNames.push([field.relation.target.toLowerCase(),primaryDBTablefields]);
+        } %>
+           
+          
       <% } %>
     <% }) %>
+          
+    <% if (indices && indices.length > 0) { %>
+      <% for (const [index, Index] of indices.entries()) { %>
+        await queryRunner.createIndex('<%= dbTableName %>', new TableIndex({
+          name: <% if (Index.name) { %>
+            <% indicesName.push('IDX_'+dbTableName+'_'+index+'_'+ Index.name); %>
+                    '<%='IDX_'+dbTableName+'_'+index+'_'+ Index.name %>' 
+                <% } else { %>
+                  <% indicesName.push('IDX_'+dbTableName+'_'+index+'_'+ Index.indicesFields.map(camelCase).join('_')); %>
+                    '<%='IDX_'+dbTableName+'_'+index+'_'+ Index.indicesFields.map(camelCase).join('_') %>' 
+                 <% }  %>,
+          columnNames: [
+            <% for (const field of Index.indicesFields) { %>
+              '<%- field%>',
+            <% } %>
+          ],
+          <% if (Index.unique) { %>
+          isUnique: true,
+          <% } %>
+        }));
+      <% } %>
+    <% } %>
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+
+    // drop one to many relations foreignkeys and columns
+    <% if (onetoManyKeyNames.length > 0) { %>
+      <% for (const [index,[entity, columns]] of onetoManyKeyNames.entries()) { %>
+        const <%= entity %>Table<%= index %> = await queryRunner.getTable('<%= entity %>');
+        const foreignKeyColumns<%= index %> = <%- JSON.stringify(columns) %>;
+
+        for (const columnName of foreignKeyColumns<%= index %>) {
+          const fk = <%= entity %>Table<%= index %>.foreignKeys.find(fk => fk.columnNames.includes(columnName));
+          if (fk) {
+            await queryRunner.dropForeignKey('<%= entity %>', fk);
+          }
+          await queryRunner.dropColumn('<%= entity %>', columnName);
+        }
+      <% } %>
+    <% } %>
+
+    // drop join tables
+    <% if(joinTablesNames.length > 0){ %>
+      <% for (const joinTableName of joinTablesNames) { %>
+        await queryRunner.dropTable('<%=joinTableName%>');
+      <% } %>
+    <% } %>
+
+
+    // drop entity's Foreign Keys
+    <% if (entityForeignKeyNames.length > 0) { %>
+      const entityTable = await queryRunner.getTable('<%= dbTableName %>');
+      const fks=<%- JSON.stringify (entityForeignKeyNames) %>;
+        for (const col of fks) {
+          const fk = entityTable.foreignKeys.find(fk => fk.columnNames.includes(col));
+          if (fk) await queryRunner.dropForeignKey('<%= dbTableName %>', fk);
+        }
+
+   <% } %>
+
+   // drop indices
+   <% if ( indicesName.length > 0) { %>
+     <% for (const indexName of indicesName) { %>
+       await queryRunner.dropIndex('<%= dbTableName %>', '<%=indexName%>');
+     <% } %>
+   <% } %>
+
+    // at last drop table
     await queryRunner.dropTable("<%= dbTableName %>");
+
+
+
   }
 }
