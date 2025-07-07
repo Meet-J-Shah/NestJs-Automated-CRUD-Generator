@@ -8,6 +8,8 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
+import { RoleResponseDto } from '../../role/dto/role.dto';
+
 export class FindManyPermissionQueryReq {
   @IsInt()
   @Transform(({ value }) => Number.parseInt(value))
@@ -86,4 +88,42 @@ export class UpdatePermissionBodyReqDto {
     required: false,
   })
   action?: string;
+}
+
+export class PermissionResponseDto {
+  @ApiProperty({ example: '1' })
+  id: string;
+
+  @ApiProperty({ example: 'pizza' })
+  module: string;
+
+  @ApiProperty({ example: 'create' })
+  action: string;
+
+  @ApiProperty({
+    example: 'admin::pizza::create',
+    description: 'Unique permission slug in the format: admin::module::action',
+  })
+  slug: string;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-01T12:00:00Z',
+  })
+  createdAt: Date;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-02T12:00:00Z',
+  })
+  updatedAt: Date;
+
+  @ApiProperty({
+    type: () => [RoleResponseDto],
+    description: 'Roles associated with this permission',
+    required: false,
+  })
+  roles?: RoleResponseDto[];
 }

@@ -12,9 +12,13 @@ import {
 import {
   ApiTags,
   ApiOperation,
-  ApiResponse,
   ApiQuery,
   ApiBearerAuth,
+  ApiExtraModels,
+  ApiParam,
+  ApiBody,
+  getSchemaPath,
+  ApiResponse,
 } from '@nestjs/swagger';
 
 import { PermissionDecorator } from '../../decorators/permission.decorator';
@@ -25,13 +29,17 @@ import { Permission } from './entities/permission.entity';
 import { permissionPermissionsConstant } from './constants/permission.constant';
 import {
   ControllerResDto,
+  PaginationResDto,
   ServiceResDto,
 } from '../../utils/global/dto/global.dto';
 import {
   FindManyPermissionQueryReq,
+  PermissionResponseDto,
   PrimaryKeysPermissionDto,
 } from './dto/permission.dto';
-
+import { plainToInstance } from 'class-transformer';
+import { ApiPaginatedResponse } from '../../utils/genralSwaggerResponse.decorator';
+@ApiExtraModels(ControllerResDto, PaginationResDto, PermissionResponseDto)
 @ApiTags('default - Admin: Permissions')
 @ApiBearerAuth('access-token')
 @Controller({ path: 'admin/permissions', version: '1' })
@@ -63,17 +71,20 @@ export class AdminPermissionController {
     example: 10,
     description: 'Number of records per page',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'List of permissions returned successfully',
-    type: ControllerResDto, // You can use a generic wrapper type here if available
-  })
+  @ApiPaginatedResponse(
+    PermissionResponseDto,
+    'List of permissions returned successfully',
+  )
   async findMany(
     @Query() findManyRoleQueryReq: FindManyPermissionQueryReq,
-  ): Promise<ControllerResDto<Permission[]>> {
+  ): Promise<ControllerResDto<PermissionResponseDto[]>> {
     const { page, limit } = findManyRoleQueryReq;
     const { data, pagination }: ServiceResDto<Permission[]> =
       await this.permissionService.findMany(null, page, limit);
-    return this.globalService.setControllerResponse(data, null, pagination);
+    const dtoList = plainToInstance(PermissionResponseDto, data, {
+      excludeExtraneousValues: true,
+    });
+
+    return this.globalService.setControllerResponse(dtoList, null, pagination);
   }
 }

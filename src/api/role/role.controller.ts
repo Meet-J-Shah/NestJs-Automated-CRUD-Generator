@@ -16,6 +16,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiExtraModels,
 } from '@nestjs/swagger';
 
 import { PermissionDecorator } from '../../decorators/permission.decorator';
@@ -27,6 +28,7 @@ import { Role } from './entities/role.entity';
 import { rolePermissionsConstant } from './constants/permission.constant';
 import {
   ControllerResDto,
+  PaginationResDto,
   ServiceResDto,
 } from '../../utils/global/dto/global.dto';
 import {
@@ -36,8 +38,15 @@ import {
   UpdateRoleBodyReqDto,
   DeleteRoleBodyReqDto,
   UpdateRolePermissionBodyReqDto,
+  RoleResponseDto,
 } from './dto/role.dto';
+import { plainToInstance } from 'class-transformer';
+import {
+  ApiPaginatedResponse,
+  ApiStandardResponse,
+} from '../../utils/genralSwaggerResponse.decorator';
 
+@ApiExtraModels(RoleResponseDto, ControllerResDto, PaginationResDto)
 @ApiTags('default - Admin:Roles')
 @ApiBearerAuth('access-token')
 @Controller({ path: 'admin/roles', version: '1' })
@@ -51,56 +60,82 @@ export class RoleController {
   /**
    * ROLE API: find many roles
    */
+
   @Get()
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_FIND_ALL)
   @ApiOperation({ summary: 'Find many roles' })
-  @ApiResponse({ status: 200, description: 'List of roles returned' })
+  @ApiPaginatedResponse(RoleResponseDto, 'Roles fetched successfully')
   async findMany(
     @Query() findManyRoleQueryReq: FindManyRoleQueryReq,
-  ): Promise<ControllerResDto<Role[]>> {
+  ): Promise<ControllerResDto<RoleResponseDto[]>> {
     const { page, limit } = findManyRoleQueryReq;
     const { data, pagination }: ServiceResDto<Role[]> =
       await this.roleService.findMany(null, page, limit);
-    return this.globalService.setControllerResponse(data, null, pagination);
+
+    const modifiedList: RoleResponseDto[] = plainToInstance(
+      RoleResponseDto,
+      data ?? [],
+      {
+        excludeExtraneousValues: true,
+      },
+    );
+
+    return this.globalService.setControllerResponse(
+      modifiedList,
+      'Roles fetched successfully.',
+      pagination,
+    );
   }
 
   /**
    * ROLE API: find one role by role id
    */
+
   @Get(':id')
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_FIND_ONE)
   @ApiOperation({ summary: 'Find one role by ID' })
-  @ApiResponse({ status: 200, description: 'Single role returned' })
+  @ApiStandardResponse(RoleResponseDto, 'Role fetched successfully')
   async findOne(
     @Param() finOneRoleParamReqDto: PrimaryKeysRoleDto,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<RoleResponseDto>> {
     const { id: roleId } = finOneRoleParamReqDto;
     const serviceResponse: Role = await this.roleService.findOne({
       id: roleId,
     });
-    return this.globalService.setControllerResponse(serviceResponse);
+    const modifiedResponse = plainToInstance(RoleResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
+
+    return this.globalService.setControllerResponse(
+      modifiedResponse,
+      'Role fetched successfully.',
+    );
   }
 
   /**
    * ROLE API: create new role
    */
+
   @Post()
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_CREATE)
   @ApiOperation({ summary: 'Create new role' })
-  @ApiResponse({ status: 200, description: 'Role created successfully' })
+  @ApiStandardResponse(RoleResponseDto, 'Role created successfully')
   async create(
     @AdminAuthDecorator() adminAuth: any,
     @Body() createRoleBodyReq: CreateRoleBodyReqDto,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<RoleResponseDto>> {
     const serviceResponse: Role = await this.roleService.create(
       createRoleBodyReq,
       adminAuth,
     );
+    const modifiedResponse = plainToInstance(RoleResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'Role created successfully.',
     );
   }
@@ -108,24 +143,28 @@ export class RoleController {
   /**
    * ROLE API: update role by role id
    */
-  @Put(':roleId')
+
+  @Put(':id')
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_UPDATE)
   @ApiOperation({ summary: 'Update role by ID' })
-  @ApiResponse({ status: 200, description: 'Role updated successfully' })
+  @ApiStandardResponse(RoleResponseDto, 'Role updated successfully')
   async update(
     @AdminAuthDecorator() adminAuth: any,
     @Param() updateRoleParamReq: PrimaryKeysRoleDto,
     @Body() updateRoleBodyReq: UpdateRoleBodyReqDto,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<RoleResponseDto>> {
     const { id: roleId } = updateRoleParamReq;
     const serviceResponse: Role = await this.roleService.update(
       roleId,
       updateRoleBodyReq,
       adminAuth,
     );
+    const modifiedResponse = plainToInstance(RoleResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'Role updated successfully.',
     );
   }
@@ -133,11 +172,20 @@ export class RoleController {
   /**
    * ROLE API: soft delete role by role id
    */
-  @Delete(':roleId')
+
+  @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_SOFT_DELETE)
   @ApiOperation({ summary: 'Soft delete role by ID' })
-  @ApiResponse({ status: 200, description: 'Role soft deleted' })
+  @ApiResponse({
+    status: 200,
+    description: 'Soft deleted role',
+    example: {
+      statusCode: 200,
+      message: 'Role soft deleted successfully.',
+      data: { isDeleted: true },
+    },
+  })
   async softDelete(
     @AdminAuthDecorator() adminAuth: any,
     @Param() deleteRoleParamReq: PrimaryKeysRoleDto,
@@ -151,24 +199,26 @@ export class RoleController {
       updateRoleBodyReq,
       adminAuth,
     );
+
     return this.globalService.setControllerResponse(
       { isDeleted: serviceResponse ? true : false },
-      'Role deleted successfully.',
+      'Role  soft deleted successfully.',
     );
   }
 
   /**
    * ROLE API: rollback soft deleted role by role id
    */
-  @Put(':roleId/rollback')
+
+  @Put(':id/rollback')
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_ROLLBACK)
   @ApiOperation({ summary: 'Rollback soft deleted role by ID' })
-  @ApiResponse({ status: 200, description: 'Soft delete rollback successful' })
+  @ApiStandardResponse(RoleResponseDto, 'Deleted role rollback successfully')
   async rollback(
     @AdminAuthDecorator() adminAuth: any,
     @Param() deleteRoleParamReq: PrimaryKeysRoleDto,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<RoleResponseDto>> {
     const { id: roleId } = deleteRoleParamReq;
     const updateRoleBodyReq: DeleteRoleBodyReqDto = {
       hasSoftDeleted: false,
@@ -179,8 +229,11 @@ export class RoleController {
       adminAuth,
       true,
     );
+    const modifiedResponse = plainToInstance(RoleResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'Deleted role rollback successfully.',
     );
   }
@@ -188,11 +241,19 @@ export class RoleController {
   /**
    * ROLE API: hard delete role by role id
    */
-  @Delete(':roleId/permanent')
+  @Delete(':id/permanent')
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_HARD_DELETE)
   @ApiOperation({ summary: 'Hard delete role by ID' })
-  @ApiResponse({ status: 200, description: 'Role permanently deleted' })
+  @ApiResponse({
+    status: 200,
+    description: 'Hard deleted role',
+    example: {
+      statusCode: 200,
+      message: 'Role deleted successfully.',
+      data: true,
+    },
+  })
   async hardDelete(
     @Param() deleteRoleParamReq: PrimaryKeysRoleDto,
   ): Promise<ControllerResDto<{ isDeleted: boolean }>> {
@@ -207,24 +268,31 @@ export class RoleController {
   /**
    * ROLE API: update permission into role by role id
    */
-  @Put(':roleId/permissions')
+
+  @Put(':id/permissions')
   @HttpCode(HttpStatus.OK)
   @PermissionDecorator(rolePermissionsConstant.ADMIN_ROLE_UPDATE_PERMISSION)
   @ApiOperation({ summary: 'Update permissions for role' })
-  @ApiResponse({ status: 200, description: 'Role permissions updated' })
+  @ApiStandardResponse(
+    RoleResponseDto,
+    'Role updated with permission successfully.',
+  )
   async updatePermission(
     @AdminAuthDecorator() adminAuth: any,
     @Param() updateRoleParamReq: PrimaryKeysRoleDto,
     @Body() updateRolePermissionBodyReq: UpdateRolePermissionBodyReqDto,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<RoleResponseDto>> {
     const { id: roleId } = updateRoleParamReq;
     const serviceResponse: Role = await this.roleService.updatePermissions(
       roleId,
       updateRolePermissionBodyReq,
       adminAuth,
     );
+    const modifiedResponse = plainToInstance(RoleResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'Role updated with permission successfully.',
     );
   }

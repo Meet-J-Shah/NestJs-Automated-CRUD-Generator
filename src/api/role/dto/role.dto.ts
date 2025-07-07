@@ -13,7 +13,8 @@ import {
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-
+import { UserResponseDto } from '../../user/dto/user.dto';
+import { PermissionResponseDto } from '../../permission/dto/permission.dto';
 export class RoleFullBodyReqDto {
   @IsString()
   @IsOptional()
@@ -163,4 +164,74 @@ export class UpdateRolePermissionBodyReqDto {
     required: false,
   })
   disconnect?: string[];
+}
+
+export class RoleResponseDto {
+  @ApiProperty({ example: '1' })
+  id: string;
+
+  @ApiProperty({ example: 'Admin' })
+  name: string;
+
+  @ApiProperty({
+    example: 'Role with all permissions',
+    required: false,
+  })
+  description?: string;
+
+  @ApiProperty({
+    example: true,
+    description: 'Indicates if the role has admin access',
+  })
+  isAdmin: boolean;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-01T12:00:00Z',
+    required: false,
+  })
+  publishedAt?: Date;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-01T10:00:00Z',
+  })
+  createdAt: Date;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-02T10:00:00Z',
+  })
+  updatedAt: Date;
+
+  @ApiProperty({
+    type: () => UserResponseDto,
+    description: 'User who created this role',
+    required: false,
+  })
+  createdBy?: UserResponseDto;
+
+  @ApiProperty({
+    type: () => UserResponseDto,
+    description: 'User who last updated this role',
+    required: false,
+  })
+  updatedBy?: UserResponseDto;
+
+  @ApiProperty({
+    type: () => [PermissionResponseDto],
+    description: 'Permissions associated with this role',
+    required: false,
+  })
+  permissions?: PermissionResponseDto[];
+
+  @ApiProperty({
+    type: () => [UserResponseDto],
+    description: 'Users assigned to this role',
+    required: false,
+  })
+  users?: UserResponseDto[];
 }

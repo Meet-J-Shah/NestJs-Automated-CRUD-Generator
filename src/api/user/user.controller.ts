@@ -39,7 +39,13 @@ import {
   PrimaryKeysUserDto,
   UserBodyUpdateReqDto,
   DeleteUserBodyReqDto,
+  UserResponseDto,
 } from './dto/user.dto';
+import {
+  ApiPaginatedResponse,
+  ApiStandardResponse,
+} from '../../utils/genralSwaggerResponse.decorator';
+import { plainToInstance } from 'class-transformer';
 
 @ApiTags('default - Admin: Users')
 @ApiBearerAuth('access-token')
@@ -60,14 +66,26 @@ export class UserController {
   @ApiOperation({ summary: 'Get all users' })
   @ApiQuery({ name: 'page', required: true, type: Number })
   @ApiQuery({ name: 'limit', required: true, type: Number })
-  @ApiResponse({ status: 200, description: 'List of users', type: [User] })
+  @ApiPaginatedResponse(UserResponseDto, 'Roles fetched successfully')
   async findMany(
     @Query('page', ParseIntPipe) page: number,
     @Query('limit', ParseIntPipe) limit: number,
-  ): Promise<ControllerResDto<User[]>> {
+  ): Promise<ControllerResDto<UserResponseDto[]>> {
     const { data, pagination }: ServiceResDto<User[]> =
       await this.userService.findMany(null, page, limit);
-    return this.globalService.setControllerResponse(data, null, pagination);
+    const modifiedList: UserResponseDto[] = plainToInstance(
+      UserResponseDto,
+      data ?? [],
+      {
+        excludeExtraneousValues: true,
+      },
+    );
+
+    return this.globalService.setControllerResponse(
+      modifiedList,
+      'Users fetched successfully.',
+      pagination,
+    );
   }
 
   /**
@@ -78,17 +96,20 @@ export class UserController {
   @PermissionDecorator(userPermissionConstant.ADMIN_USER_CREATE)
   @ApiOperation({ summary: 'Create a new user' })
   @ApiBody({ type: UserBodyReqDto })
-  @ApiResponse({ status: 200, description: 'User created', type: User })
+  @ApiStandardResponse(UserResponseDto, 'User created successfully')
   async create(
     @AdminAuthDecorator() adminAuth: any,
     @Body() userBodyReq: UserBodyReqDto<Role>,
-  ): Promise<ControllerResDto<User>> {
+  ): Promise<ControllerResDto<UserResponseDto>> {
     const serviceResponse: User = await this.userService.create(
       userBodyReq,
       adminAuth,
     );
+    const modifiedResponse = plainToInstance(UserResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'User created successfully.',
     );
   }
@@ -101,13 +122,19 @@ export class UserController {
   @PermissionDecorator(userPermissionConstant.ADMIN_USER_FIND_ONE)
   @ApiOperation({ summary: 'Get a user by ID' })
   @ApiParam({ name: 'userId', description: 'User ID', type: String })
-  @ApiResponse({ status: 200, description: 'User data', type: User })
+  @ApiStandardResponse(UserResponseDto, 'User fetched successfully')
   async findOne(
     @Param() userParamReqDto: PrimaryKeysUserDto,
-  ): Promise<ControllerResDto<User>> {
+  ): Promise<ControllerResDto<UserResponseDto>> {
     const { userId } = userParamReqDto;
     const serviceResponse: User = await this.userService.findOne(userId);
-    return this.globalService.setControllerResponse(serviceResponse);
+    const modifiedResponse = plainToInstance(UserResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
+    return this.globalService.setControllerResponse(
+      modifiedResponse,
+      ' User fetched successfully.',
+    );
   }
 
   /**
@@ -119,20 +146,23 @@ export class UserController {
   @ApiOperation({ summary: 'Update a user by ID' })
   @ApiParam({ name: 'userId', description: 'User ID', type: String })
   @ApiBody({ type: UserBodyUpdateReqDto })
-  @ApiResponse({ status: 200, description: 'User updated', type: User })
+  @ApiStandardResponse(UserResponseDto, 'User updated successfully')
   async update(
     @AdminAuthDecorator() adminAuth: any,
     @Param() userParamReq: PrimaryKeysUserDto,
     @Body() userBodyReq: UserBodyUpdateReqDto<Role>,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<UserResponseDto>> {
     const { userId } = userParamReq;
     const serviceResponse: User = await this.userService.update(
       userBodyReq,
       userId,
       adminAuth,
     );
+    const modifiedResponse = plainToInstance(UserResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'User updated successfully.',
     );
   }
@@ -145,7 +175,15 @@ export class UserController {
   @PermissionDecorator(userPermissionConstant.ADMIN_USER_HARD_DELETE)
   @ApiOperation({ summary: 'Permanently delete a user by ID' })
   @ApiParam({ name: 'userId', description: 'User ID', type: String })
-  @ApiResponse({ status: 200, description: 'User permanently deleted' })
+  @ApiResponse({
+    status: 200,
+    description: 'Hard deleted User',
+    example: {
+      statusCode: 200,
+      message: 'User permanently deleted successfully.',
+      data: true,
+    },
+  })
   async hardDelete(
     @Param() userParamReq: PrimaryKeysUserDto,
   ): Promise<ControllerResDto<{ isDeleted: boolean }>> {
@@ -165,7 +203,15 @@ export class UserController {
   @PermissionDecorator(userPermissionConstant.ADMIN_USER_SOFT_DELETE)
   @ApiOperation({ summary: 'Soft delete a user by ID' })
   @ApiParam({ name: 'userId', description: 'User ID', type: String })
-  @ApiResponse({ status: 200, description: 'User soft deleted' })
+  @ApiResponse({
+    status: 200,
+    description: 'Soft deleted user',
+    example: {
+      statusCode: 200,
+      message: 'User soft deleted successfully.',
+      data: { isDeleted: true },
+    },
+  })
   async softDelete(
     @AdminAuthDecorator() adminAuth: any,
     @Param() userParamReq: PrimaryKeysUserDto,
@@ -193,15 +239,11 @@ export class UserController {
   @PermissionDecorator(userPermissionConstant.ADMIN_USER_ROLLBACK)
   @ApiOperation({ summary: 'Rollback soft-deleted user by ID' })
   @ApiParam({ name: 'userId', description: 'User ID', type: String })
-  @ApiResponse({
-    status: 200,
-    description: 'Soft delete rolled back',
-    type: User,
-  })
+  @ApiStandardResponse(UserResponseDto, 'Deleted user rollback successfully')
   async rollback(
     @AdminAuthDecorator() adminAuth: any,
     @Param() deleteUserParamReq: PrimaryKeysUserDto,
-  ): Promise<ControllerResDto<Role>> {
+  ): Promise<ControllerResDto<UserResponseDto>> {
     const { userId } = deleteUserParamReq;
     const updateRoleBodyReq: DeleteUserBodyReqDto = {
       hasSoftDeleted: false,
@@ -212,8 +254,11 @@ export class UserController {
       adminAuth,
       true,
     );
+    const modifiedResponse = plainToInstance(UserResponseDto, serviceResponse, {
+      excludeExtraneousValues: true,
+    });
     return this.globalService.setControllerResponse(
-      serviceResponse,
+      modifiedResponse,
       'Deleted user rollback successfully.',
     );
   }

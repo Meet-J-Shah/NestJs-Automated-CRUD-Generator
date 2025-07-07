@@ -618,12 +618,31 @@ export class GenerateProcessor {
                   const type = oneToManyForeignKeyDtypes[i];
                   let typeDecorator = '@IsString()';
                   if (type === 'bigint') {
-                    typeDecorator =
-                      '@IsString()\n  @Matches(/^\\d+$/, { message: "ID must be a string of digits"})';
+                    typeDecorator = ` @ApiProperty({
+                        example: '9223372036854775807',
+                        description: 'BigInt primary key field (as string)',
+                        type: 'string',
+                      })
+                      @IsString()\n  
+                      @Matches(/^\\d+$/, { message: "ID must be a string of digits"})`;
                   } else if (type === 'uuid') {
-                    typeDecorator = '@IsUUID()';
+                    typeDecorator = `@IsUUID()
+                      @ApiProperty({
+                      example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+                      description: 'UUID primary key field',
+                      type: 'string',
+                      format: 'uuid',
+                      })`;
                   } else if (type === 'int') {
-                    typeDecorator = '@Type(() => Number)\n  @IsInt()';
+                    typeDecorator = `
+                    @Type(() => Number)  
+                    @ApiProperty({
+                      example: 123,
+                      description: 'Integer primary key',
+                      type: 'integer',
+                      format: 'int32',
+                    })
+                      @IsInt()`;
                   }
 
                   return `
@@ -697,6 +716,28 @@ export class GenerateProcessor {
                 @Post('modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}')
                 @HttpCode(HttpStatus.OK)
                 @PermissionDecorator(${moduleName}PermissionsConstant.ADMIN_${moduleName.toUpperCase()}_CREATE)
+                  @ApiOperation({ summary: 'Modify ${field.name.charAt(0).toUpperCase() + field.name.slice(1)} (connect/disconnect IDs)' })
+                  @ApiExtraModels(MultiplePrimaryKeys${className}Dto)
+                  @ApiBody({
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        connectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
+                        disconnectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
+                      },
+                    },
+                  })
+                  @ApiResponse({
+                    status: 200,
+                    description: 'modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}updated successfully.',
+                    schema: {
+                      example: {
+                        statusCode: 200,
+                        message: 'Modified ${field.name.charAt(0).toUpperCase() + field.name.slice(1)}  successfully.',
+                        data: { isAdded: true },
+                      },
+                    },
+                  })
                 async modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}(
                   @Body('connectIds') connectIds: MultiplePrimaryKeys${className}Dto,
                   @Body('disconnectIds') disconnectIds: MultiplePrimaryKeys${className}Dto,

@@ -12,6 +12,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { RoleResponseDto } from '../../role/dto/role.dto';
 
 export class UserBodyReqDto<T> {
   @IsEmail()
@@ -152,4 +153,46 @@ export class DeleteUserBodyReqDto {
     description: 'Whether to perform a soft delete instead of hard delete',
   })
   hasSoftDeleted?: boolean;
+}
+
+export class UserResponseDto {
+  @ApiProperty({ example: '123' })
+  id: string;
+
+  @ApiProperty({ example: 'user@example.com' })
+  email: string;
+
+  @ApiProperty({ example: 'John' })
+  firstName: string;
+
+  @ApiProperty({ example: 'Doe' })
+  lastName: string;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-01T12:00:00Z',
+    required: false,
+  })
+  publishedAt?: Date;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-01T10:00:00Z',
+  })
+  createdAt: Date;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2024-06-02T10:00:00Z',
+  })
+  updatedAt: Date;
+
+  @ApiProperty({
+    type: () => [RoleResponseDto],
+    description: 'List of roles assigned to the user',
+  })
+  roles: RoleResponseDto[];
 }

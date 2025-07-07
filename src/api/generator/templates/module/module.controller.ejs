@@ -18,6 +18,7 @@ import {
   getSchemaPath,
   ApiBody,
   ApiBearerAuth,
+  ApiExtraModels,
 } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../../guards/adminAuth.guard';
 import { AdminAuthDecorator } from '../../decorators/adminAuth.decorator';
@@ -27,11 +28,13 @@ import { <%= className %>Service } from './<%= fileName %>.service';
 import { <%= relatedEntityClass %> } from '../../configs/entity.config';
 import { <%= className %> } from './entities/<%= fileName %>.entity';
 import { <%= camelName %>PermissionsConstant } from './constants/permission.constant';
+import { plainToInstance } from 'class-transformer';
 import {
   ControllerResDto,
   ServiceResDto,
 } from '../../utils/global/dto/global.dto';
 import {
+  <%= className %>ResponseDto,
   FindMany<%= className %>QueryReq,
   PrimaryKeys<%= className %>Dto,
   Create<%= className %>BodyReqDto,
@@ -40,6 +43,10 @@ import {
      Delete<%= className %>BodyReqDto,
   <% } %>
 } from './dto/<%= fileName %>.dto';
+import {
+  ApiPaginatedResponse,
+  ApiStandardResponse,
+} from '../../utils/genralSwaggerResponse.decorator';
 
 <%
   const importedRelations = new Set();
@@ -70,14 +77,26 @@ export class <%= className %>Controller {
   @ApiOperation({ summary: 'Get all <%= className %>s', description: 'Get all <%= className %>s', })
   @ApiQuery({ name: 'page', required: true, type: Number })
   @ApiQuery({ name: 'limit', required: true, type: Number })
-  @ApiResponse({ status: 200, description: 'List of <%= className %>s', type: [<%= className %>] })
+  @ApiPaginatedResponse(<%= className %>ResponseDto, '<%= className %>s fetched successfully')
   async findMany(
     @Query() findManyQueryReq: FindMany<%= className %>QueryReq,
-  ): Promise<ControllerResDto<<%= className %>[]>> {
+  ): Promise<ControllerResDto<<%= className %>ResponseDto[]>> {
     const { page, limit } = findManyQueryReq;
     const { data, pagination }: ServiceResDto<<%= className %>[]> =
       await this.<%= camelName %>Service.findMany(null, page, limit);
-    return this.globalService.setControllerResponse(data, null, pagination);
+      const modifiedList: <%= className %>ResponseDto[] = plainToInstance(
+        <%= className %>ResponseDto,
+      data ?? [],
+      {
+        excludeExtraneousValues: true,
+      },
+    );
+
+    return this.globalService.setControllerResponse(
+      modifiedList,
+      '<%= className %>s fetched successfully.',
+      pagination,
+    );
   }
 
   @Post()
@@ -85,17 +104,20 @@ export class <%= className %>Controller {
   @PermissionDecorator(<%= camelName %>PermissionsConstant.ADMIN_<%= constantName %>_CREATE)
   @ApiOperation({ summary: 'Create a new <%= className %>' })
   @ApiBody({ type: Create<%= className %>BodyReqDto }) 
-  @ApiResponse({ status: 200, description: '<%= className %> created', type: <%= className %> })
+  @ApiStandardResponse(<%= className %>ResponseDto, '<%= className %> created successfully')
   async create(
     <% if(creationConfig?.operator) {%>
       @AdminAuthDecorator() adminAuth: any,
     <% } %>
     @Body() bodyReq: Create<%= className %>BodyReqDto,
-  ): Promise<ControllerResDto<<%= className %>>> {
+  ): Promise<ControllerResDto<<%= className %>ResponseDto>> {
     const result = await this.<%= camelName %>Service.create(bodyReq <% if(creationConfig?.operator) {%>
      , adminAuth,
     <% } %>);
-    return this.globalService.setControllerResponse(result, '<%= className %> created successfully.');
+    const modifiedResponse = plainToInstance(<%= className %>ResponseDto, result, {
+      excludeExtraneousValues: true,
+    });
+    return this.globalService.setControllerResponse(modifiedResponse, '<%= className %> created successfully.');
   }
 
   @Get('getOne')
@@ -103,10 +125,13 @@ export class <%= className %>Controller {
   @PermissionDecorator(<%= camelName %>PermissionsConstant.ADMIN_<%= constantName %>_FIND_ONE)
   @ApiOperation({ summary: 'Get a <%= className %> by PrimaryKeyFields' })
   // @ApiQuery({ type: PrimaryKeys<%= className %>Dto, name: 'primaryKeyDto', required: true })
-  @ApiResponse({ status: 200, description: '<%= className %> data', type: <%= className %> })
-  async findOne( @Query() primaryKeyDto:PrimaryKeys<%= className %>Dto): Promise<ControllerResDto<<%= className %>>> {
+  @ApiStandardResponse(<%= className %>ResponseDto, '<%= className %> fetched successfully')
+  async findOne( @Query() primaryKeyDto:PrimaryKeys<%= className %>Dto): Promise<ControllerResDto<<%= className %>ResponseDto>> {
     const result = await this.<%= camelName %>Service.findOne(primaryKeyDto);
-    return this.globalService.setControllerResponse(result);
+    const modifiedResponse = plainToInstance(<%= className %>ResponseDto, result, {
+      excludeExtraneousValues: true,
+    });
+    return this.globalService.setControllerResponse(modifiedResponse, '<%= className %> fetched successfully.');
   }
 
   @Put('updateOne')
@@ -115,18 +140,21 @@ export class <%= className %>Controller {
   @ApiOperation({ summary: 'Update a <%= className %> by PrimaryKeyFields' })
   // @ApiQuery({ type: PrimaryKeys<%= className %>Dto, name: 'primaryKeyDto', required: true })
   @ApiBody({ type: Update<%= className %>BodyReqDto }) 
-  @ApiResponse({ status: 200, description: '<%= className %> updated', type: <%= className %> })
+  @ApiStandardResponse(<%= className %>ResponseDto, '<%= className %> updated successfully')
   async update(
     <% if(creationConfig?.operator) {%>
       @AdminAuthDecorator() adminAuth: any,
     <% } %>
     @Query() primaryKeyDto: PrimaryKeys<%= className %>Dto,      
     @Body() bodyReq: Update<%= className %>BodyReqDto,
-  ): Promise<ControllerResDto<<%= className %>>> {
+  ): Promise<ControllerResDto<<%= className %>ResponseDto>> {
     const result = await this.<%= camelName %>Service.update(bodyReq, primaryKeyDto<% if(creationConfig?.operator) {%>
       , adminAuth,
      <% } %>);
-    return this.globalService.setControllerResponse(result, '<%= className %> updated successfully.');
+    const modifiedResponse = plainToInstance(<%= className %>ResponseDto, result, {
+      excludeExtraneousValues: true,
+    });
+    return this.globalService.setControllerResponse(modifiedResponse, '<%= className %> updated successfully.');
   }
 
   @Delete('deletePermanent')
@@ -134,7 +162,15 @@ export class <%= className %>Controller {
   @PermissionDecorator(<%= camelName %>PermissionsConstant.ADMIN_<%= constantName %>_HARD_DELETE)
   @ApiOperation({ summary: 'Permanently delete a <%= className %> by PrimaryKeyFields' })
   // @ApiQuery({ type: PrimaryKeys<%= className %>Dto, name: 'primaryKeyDto', required: true })
-  @ApiResponse({ status: 200, description: '<%= className %> permanently deleted' })
+  @ApiResponse({
+    status: 200,
+    description: 'Hard deleted <%= className %>',
+    example: {
+      statusCode: 200,
+      message: '<%= className %> deleted successfully.',
+      data: true,
+    },
+  })
   async hardDelete(@Query() primaryKeyDto:   PrimaryKeys<%= className %>Dto
    ): Promise<ControllerResDto<{ isDeleted: boolean }>> {
     const isDeleted = await this.<%= camelName %>Service.delete(primaryKeyDto);
@@ -146,7 +182,15 @@ export class <%= className %>Controller {
   @PermissionDecorator(<%= camelName %>PermissionsConstant.ADMIN_<%= constantName %>_SOFT_DELETE)
   @ApiOperation({ summary: 'Soft delete a <%= className %> by PrimaryKeyFields' })
   // @ApiQuery({ type: PrimaryKeys<%= className %>Dto, name: 'primaryKeyDto', required: true })
-  @ApiResponse({ status: 200, description: '<%= className %> soft deleted' })
+  @ApiResponse({
+    status: 200,
+    description: 'Soft deleted <%= className %>',
+    example: {
+      statusCode: 200,
+      message: '<%= className %> soft deleted successfully.',
+      data: { isDeleted: true },
+    },
+  })
   async softDelete(
     <% if(creationConfig?.operator) {%>
       @AdminAuthDecorator() adminAuth: any,
@@ -164,23 +208,22 @@ export class <%= className %>Controller {
   @PermissionDecorator(<%= camelName %>PermissionsConstant.ADMIN_<%= constantName %>_ROLLBACK)
   @ApiOperation({ summary: 'Rollback soft-deleted <%= className %> by PrimaryKeyFields' })
   // @ApiQuery({ type: PrimaryKeys<%= className %>Dto, name: 'primaryKeyDto', required: true })
-  @ApiResponse({
-    status: 200,
-    description: 'Soft deleted <%= className %> rolled back',
-    type: <%= className %>,
-  })
+  @ApiStandardResponse(<%= className %>ResponseDto, 'Deleted <%= className %> rollback successfully')
   async rollback(
     <% if(creationConfig?.operator) {%>
       @AdminAuthDecorator() adminAuth: any,
     <% } %>
-    @Query() primaryKeyDto:PrimaryKeys<%= className %>Dto,): Promise<ControllerResDto<<%= className %>>> {
+    @Query() primaryKeyDto:PrimaryKeys<%= className %>Dto,): Promise<ControllerResDto<<%= className %>ResponseDto>> {
     const bodyReq: Delete<%= className %>BodyReqDto = { hasSoftDeleted: false };
     const result = await this.<%= camelName %>Service.update(bodyReq, primaryKeyDto,
     <% if(creationConfig?.operator) {%>
       adminAuth,
      <% } %> 
      true);
-    return this.globalService.setControllerResponse(result, '<%= className %> rollback successful.');
+    const modifiedResponse = plainToInstance(<%= className %>ResponseDto, result, {
+      excludeExtraneousValues: true,
+    });
+    return this.globalService.setControllerResponse(modifiedResponse, '<%= className %> rollback successful.');
   }
   <% } %>
  // apis for entries in join  tables
@@ -194,7 +237,8 @@ export class <%= className %>Controller {
       @HttpCode(HttpStatus.OK)
       @PermissionDecorator(<%= camelName %>PermissionsConstant.ADMIN_<%= constantName %>_CREATE)
       @ApiOperation({ summary: 'Modify <%= field.name.charAt(0).toUpperCase() + field.name.slice(1) %> (connect/disconnect IDs)' })
-      // @ApiQuery({ type: PrimaryKeys<%= className %>Dto })
+      @ApiExtraModels(MultiplePrimaryKeys<%=relatedClass %>Dto)
+      //@ApiQuery({ type: PrimaryKeys<%= className %>Dto })
       @ApiBody({
         schema: {
           type: 'object',
