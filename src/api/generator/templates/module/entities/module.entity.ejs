@@ -14,294 +14,161 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   BeforeInsert,
+  Index,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
-import {User} from "../../user/entities/user.entity";
-<% if (indices) { %>
-import { Index } from 'typeorm';
-<% } %>
-<% if (primaryFields && primaryFields[0] && primaryFields[0].dtype === 'uuid') { %>
+import { User } from '../../user/entities/user.entity';
+<% if (primaryFields?.[0]?.dtype === 'uuid') { %>
 import { v4 as uuidv4 } from 'uuid';
 <% } %>
-
-<%
-  const importedRelations = new Set();
-%>
-<% fields.forEach(field => { %>
-  <% if (field.relation && field.relation.target !== 'User' && !importedRelations.has(field.relation.target)) { 
-       const relationFile = field.relation.target.toLowerCase();
-       importedRelations.add(field.relation.target);
-  %>
-import { <%= field.relation.target %> } from "../../<%= relationFile %>/entities/<%= relationFile %>.entity";
-  <% } %>
-<% }) %>
+<% const importedRelations = new Set(['User']); %>
+<% fields.forEach(field => { if (field.relation && !importedRelations.has(field.relation.target)) { importedRelations.add(field.relation.target); %>
+import { <%= field.relation.target %> } from '../../<%= field.relation.target.toLowerCase() %>/entities/<%= field.relation.target.toLowerCase() %>.entity';
+<% } }) %>
 
 @Entity()
-<% if(indices && indices.length > 0) { %>
-  <% indices.forEach((Index,index) => { %>
-    @Index( <% if (Index.name) { %>'<%='IDX_'+dbTableName+'_'+index+'_'+ Index.name %>' 
-            <% } else { %>'<%='IDX_'+dbTableName+'_'+index+'_'+ Index.indicesFields.map(camelCase).join('_') %>' 
-            <% }  %>
-            ,<%- JSON.stringify(Index.indicesFieldsEntity) %>
-            <% if (Index.unique) { %>, { unique: true } <% } %>
-          )
-    
-  <% }) %>
+<% if (indices?.length > 0) { %>
+<% indices.forEach((index, idx) => { %>
+@Index(
+  '<%= `IDX_${dbTableName}_${idx}_${index.name ||  index.indicesFields.map(camelCase).join('_') }` %>',
+  <%- JSON.stringify(index.indicesFieldsEntity) %>,
+  <% if (index.unique) { %>{ unique: true }<% } %>
+)
+<% }) %>
 <% } %>
 export class <%= name %> {
-  <% const primaryKeys=[]; const primaryDBKeys=[]; const primaryKeyTypes=[]; %>
-  <% if (primaryFields) {%>
-    <% if (primaryFields.length === 1) {%>
-      <% primaryKeys.push(primaryFields[0].name); 
-         primaryDBKeys.push(primaryFields[0].dbName || snakeCase(primaryFields[0].name));  
-       %>
-      <% if (primaryFields[0].dtype === 'uuid') { %>
-        <%  primaryKeyTypes.push('char');%>
-        @PrimaryColumn({ type: 'char', length: '36', name: '<%= primaryFields[0].dbName || snakeCase(primaryFields[0].name) %>' ,default: () => 'UUID()' })
-      <% } else { %>
-        <%  primaryKeyTypes.push(primaryFields[0].dtype || 'bigint');%>
-          @PrimaryGeneratedColumn({ 
-            type: '<%= primaryFields[0].dtype ||  "bigint" %>',
-            name: '<%= primaryFields[0].dbName || snakeCase(primaryFields[0].name) %>'
-          })
-      <% } %>
-        <%= primaryFields[0].name %>: <%= primaryFields[0].type || 'string' %>
-        <% if (primaryFields[0].dtype === 'uuid') { %>
-          @BeforeInsert()
-            generateUUID() {
-              if (!this.<%= primaryFields[0].name %>) {
-                this.<%= primaryFields[0].name %> = uuidv4();
-              }
-            }
-          <% } %>
-    <% } else { %>
-          <% primaryFields.forEach(primaryField => { %>
-            <%  primaryKeys.push( primaryField.name);
-                primaryDBKeys.push( primaryField.dbName || snakeCase(primaryField.name));  
-            %>
-            @PrimaryColumn({ type: 
-              <% if (primaryField.dtype === 'uuid') { %>
-                <%  primaryKeyTypes.push('char');%>
-                'char',
-                length: '36' 
-              <% } else{ %>
-                <%  primaryKeyTypes.push(primaryField.dtype || 'bigint');%>
-                '<%= primaryFields[0].dtype || "bigint" %>' <% } %>,
-              <% if (primaryField.dbName) { %>name: '<%= primaryField.dbName %>',
-              <% } else{ %>name: '<%=snakeCase( primaryField.name )%>' <% } %>
-            })
-            <%= primaryField.name %> : <% if (primaryField.type) { %><%= primaryField.type %>
-              <% } else{ %>string <% } %>;
-          <% }) %>
-    <% } %>
+  <% const primaryKeys = primaryFields?.length ? primaryFields.map(f => f.name) : ['id']; %>
+  <% const primaryDBKeys = primaryFields?.length ? primaryFields.map(f => f.dbName || snakeCase(f.name)) : ['id']; %>
+  <% const primaryKeyTypes = primaryFields?.length ? primaryFields.map(f => f.dtype || 'bigint') : ['bigint']; %>
+
+  <% if (!primaryFields?.length) { %>
+  @PrimaryGeneratedColumn({ type: 'bigint', name: 'id' })
+  id: string;
+  <% } else if (primaryFields.length === 1) { %>
+  <% const pf = primaryFields[0]; %>
+  <% if (pf.dtype === 'uuid') { %>
+  @PrimaryColumn({ type: 'char', length: '36', name: '<%= pf.dbName || snakeCase(pf.name) %>', default: () => 'UUID()' })
+  <%= pf.name %>: <%= pf.type || 'string' %>;
+  @BeforeInsert()
+  generateUUID() {
+    if (!this.<%= pf.name %>) this.<%= pf.name %> = uuidv4();
+  }
   <% } else { %>
-    <% primaryKeys.push('id'); %>
-    <%  primaryKeyTypes.push( 'bigint');%>
-      @PrimaryGeneratedColumn({ type: 'bigint', name: 'id' })
-      id: string;
+  @PrimaryGeneratedColumn({ type: '<%= pf.dtype || 'bigint' %>', name: '<%= pf.dbName || snakeCase(pf.name) %>' })
+  <%= pf.name %>: <%= pf.type || 'string' %>;
   <% } %>
-<% fields.forEach(field => { %>
-  <% if (field.relation) {%>
-    <% let targetLower =field.relation.target.toLowerCase(); %>
-    <% let generatedInverse =name.toLowerCase()+field.name.charAt(0).toUpperCase() + field.name.slice(1); %>
-    @<%= field.relation.type %>(
-      () => <%= field.relation.target %><% if (field.relation.inverseSide) { %>, (<%= targetLower %>) => <%= targetLower %>.<%= field.relation.inverseSide %>
-        <% } else if(!field.relation.uniDirectional){ %>
-            , (<%= targetLower %>) => <%= targetLower %>.<%= generatedInverse %>
-        <% } %>
-   ,{
-      
-      <% if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %> 
-        cascade: <%= field.relation.cascade ?? false%>, 
-        onUpdate: '<%- field.relation.onUpdate ?? 'CASCADE'%>',
-        onDelete: '<%- field.relation.onDelete ?? 'SET NULL'%>',
-       <% if (field.relation.nullable !== undefined) { %>nullable: <%= field.relation.nullable %>,<% } %>
-      <% } %> 
-      <% if (field.relation.type === 'ManyToMany') { %>
-      cascade: <%= field.relation.cascade ?? false%>, 
+  <% } else { %>
+  <% primaryFields.forEach(pf => { %>
+  @PrimaryColumn({
+    type: <% if (pf.dtype === 'uuid') { %>'char', length: 36<% } else { %>'<%= pf.dtype || 'bigint' %>'<% } %>,
+    name: '<%= pf.dbName || snakeCase(pf.name) %>'
+  })
+  <%= pf.name %>: <%= pf.type || 'string' %>;
+  <% }) %>
+  <% } %>
+
+  <% fields.forEach(field => { %>
+  <% if (field.relation) { %>
+  <% const targetLower = field.relation.target.toLowerCase(); %>
+  <% const inverseSide = field.relation.inverseSide || `${name.toLowerCase()}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`; %>
+  @<%= field.relation.type %>(
+    () => <%= field.relation.target %>
+    <% if (!field.relation.uniDirectional) { %>,<%= targetLower %> => <%= targetLower %>.<%= inverseSide %><% } %>
+    , {
+      <% if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %>
+      cascade: <%= field.relation.cascade ?? false %>,
+      onUpdate: '<%= field.relation.onUpdate ?? 'CASCADE' %>',
+      onDelete: '<%= field.relation.onDelete ?? 'SET NULL' %>',
+      <% if (field.relation.nullable !== undefined) { %>nullable: <%= field.relation.nullable %>,<% } %>
+      <% } else if (field.relation.type === 'ManyToMany') { %>
+      cascade: <%= field.relation.cascade ?? false %>,
       <% } %>
-    } 
+    }
   )
-    <% if (field.relation.type === 'ManyToMany') { %>  
-      <% const primaryTablefields=[]; const primaryDBTablefields=[]; %>
-      <% if (field.relation.joinTable?.joinColumn) { %>
-
-
-      <% primaryDBTablefields.push(field.relation.joinTable.joinColumn.name); 
-        if(primaryKeys.indexOf(
-          (field.relation.joinTable.joinColumn.referencedColumnName) !== -1 
-          || primaryKeys.indexOf(snakeCase(field.relation.joinTable.joinColumn.referencedColumnName) !== -1) )
-          && primaryKeys.length === 1)
-        {
-          primaryTablefields.push(field.relation.joinTable.joinColumn.referencedColumnName);
-        }
-        else{
-          primaryTablefields.push(...primaryKeys);
-          if(primaryKeys.length>1){
-            primaryDBTablefields.push(...primaryDBKeys.slice(1).map(item => `${dbTableName}_${item}`));
-          }
-        }
-      %>
-      <% } else { %>
-      <% if (primaryFields && primaryFields.length === 1) { %>
-    
-        <% const name2 = `${primaryFields[0].dbName || snakeCase(primaryFields[0].name)}`;
-          primaryTablefields.push(primaryFields[0].name); 
-          primaryDBTablefields.push(`${dbTableName}_${name2}`);
-        %>
-
-      <% } else if (primaryFields && primaryFields.length > 1) { %>
-      <% primaryFields.forEach((field, index) => { %>
-          <% const name2 = `${field.dbName || snakeCase(field.name)}`;
-            primaryTablefields.push(`${field.name}`); 
-            primaryDBTablefields.push(`${dbTableName}_${name2}`);
-          %>
-      <% }); %>
-      <% } else { %>
-        <%  primaryTablefields.push(`id`); 
-            primaryDBTablefields.push(`${dbTableName}_id`);
-        %>
-      <% } %>
-      <% } %>
-
-      @JoinTable({name : '<%= field.relation.joinTable?.name || name.toLowerCase() + "_" + field.relation.target.toLowerCase() + "_map" %>',
-      
-        joinColumns:[
-         <% primaryDBTablefields.forEach((field, index) => { %>
-            {
-              name: '<%- field %>',
-              referencedColumnName: '<%- primaryTablefields[index] %>',
-            },
-          <%}); %>
-        ],
-        inverseJoinColumns:[ {
-          name: '<%= field.relation.joinTable?.inverseJoinColumn?.name || field.relation.target.toLowerCase() + '_id' %>',
-          referencedColumnName: '<%= field.relation.joinTable?.inverseJoinColumn?.referencedColumnName || 'id' %>', 
-        },]
-      })
-      <%= field.name %>: <%- field.relation.isArray ? `${field.relation.target}[]` : `${field.relation.target}` %>;
-<% } else if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %>
-  @JoinColumn(
-        <% if (field.relation.joinColumn) { %>
-          <%- JSON.stringify(field.relation.joinColumn, null, 2) %>
-        <% } else {%>{ name:'<%= field.relation.joinColumn?.name ||  snakeCase(field.name)+'_id' %>' }
-        <%}%>
-      )
-  <%= field.name %>: <%- field.relation.isArray ? `${field.relation.target}[]` : `${field.relation.target}` %>;
-
-  @Column({ name:'<%= field.relation.joinColumn?.name ||  snakeCase(field.name)+'_id' %>', type: 'bigint', nullable: true })
+  <% if (field.relation.type === 'ManyToMany') { %>
+  <% const joinTableName = field.relation.joinTable?.name || `${name.toLowerCase()}_${field.relation.target.toLowerCase()}_map`; %>
+  <% const joinColumns = field.relation.joinTable?.joinColumn ? [field.relation.joinTable.joinColumn] : primaryFields?.length ? primaryFields.map((f, i) => ({
+      name: `${dbTableName}_${f.dbName || snakeCase(f.name)}`,
+      referencedColumnName: f.name
+    })) : [{ name: `${dbTableName}_id`, referencedColumnName: 'id' }]; %>
+  @JoinTable({
+    name: '<%= joinTableName %>',
+    joinColumns: [
+      <% joinColumns.forEach(jc => { %>
+      { name: '<%= jc.name %>', referencedColumnName: '<%= jc.referencedColumnName %>' },
+      <% }) %>
+    ],
+    inverseJoinColumns: [{
+      name: '<%= field.relation.joinTable?.inverseJoinColumn?.name || `${field.relation.target.toLowerCase()}_id` %>',
+      referencedColumnName: '<%= field.relation.joinTable?.inverseJoinColumn?.referencedColumnName || 'id' %>'
+    }]
+  })
+  <%= field.name %>: <%= field.relation.isArray ? `${field.relation.target}[]` : field.relation.target %>;
+  <% } else if (['OneToOne', 'ManyToOne'].includes(field.relation.type)) { %>
+  @JoinColumn(<% if (field.relation.joinColumn) { %><%- JSON.stringify(field.relation.joinColumn, null, 2) %><% } else { %>{ name: '<%= field.relation.joinColumn?.name || snakeCase(field.name) + '_id' %>' }<% } %>)
+  <%= field.name %>: <%= field.relation.isArray ? `${field.relation.target}[]` : field.relation.target %>;
+  @Column({ name: '<%= field.relation.joinColumn?.name || snakeCase(field.name) + '_id' %>', type: 'bigint', nullable: true })
   <%= field.name %>Id?: string;
-<% } else if (field.relation.type === 'OneToMany') { %>
-  <%= field.name %>: <%- field.relation.isArray ? `${field.relation.target}[]` : `${field.relation.target}` %>;
-<% } %>
-    
-
-  
-  <% } else { %>
-    @Column({
-      <% if (field.type) { %>type: '<%= field.dtype %>',<% } %>
-      <% if (field.dtype==='enum' && field.enum) { %>enum: <%- JSON.stringify(field.enum) %>,<% } %>
-      <% if (field.dbName) { %>name: '<%= field.dbName %>',<% } else{ %>name: '<%= snakeCase(field.name) %>' <% } %>,
-      <% if (field.length &&( field.dtype==='char' || field.dtype==='varchar')) { %>length: <%= field.length || 255 %>,<% } %>
-      <% if(field.dtype==='decimal') { %>
-        <% if (field.subTypeOptions.m) { %>precision: <%= field.subTypeOptions.m %>,<% } %>
-        <% if (field.subTypeOptions.d) { %>scale: <%= field.subTypeOptions.d %>,<% } %>
-      <% } %>
-      <% if (field.nullable !== undefined) { %>nullable: <%= field.nullable %>,<% } %>
-      <% if (field.unique) { %>unique: true,<% } %>
-      <% if (field.default !== undefined) { %>default: <%- JSON.stringify(field.default) %>,<% } %>
-    })
-    <%= field.name %>:
-    <% if (field.enum) { if(field.dtype==='enum'){%><%- field.enum.map(v => `'${v}'`).join(' | ') %>
-    <%} else if(field.dtype==='simple-array') { %>(<%- field.enum.map(v => `'${v}'`).join(' | ') %>)[]
-    <%}%>
-    <% } else { %>
-      <%- field.type || field.dtype %>;
-     <% } %>
+  <% } else if (field.relation.type === 'OneToMany') { %>
+  <%= field.name %>: <%= field.relation.isArray ? `${field.relation.target}[]` : field.relation.target %>;
   <% } %>
-  
-<% }) %>
+  <% } else { %>
+  @Column({
+    <% if (field.dtype) { %>type: '<%= field.dtype %>',<% } %>
+    <% if (field.dtype === 'enum' && field.enum) { %>enum: <%- JSON.stringify(field.enum) %>,<% } %>
+    name: '<%= field.dbName || snakeCase(field.name) %>',
+    <% if (field.length && ['char', 'varchar'].includes(field.dtype)) { %>length: <%= field.length || 255 %>,<% } %>
+    <% if (field.dtype === 'decimal') { %>
+    <% if (field.subTypeOptions?.m) { %>precision: <%= field.subTypeOptions.m %>,<% } %>
+    <% if (field.subTypeOptions?.d) { %>scale: <%= field.subTypeOptions.d %>,<% } %>
+    <% } %>
+    <% if (field.nullable !== undefined) { %>nullable: <%= field.nullable %>,<% } %>
+    <% if (field.unique) { %>unique: true,<% } %>
+    <% if (field.default !== undefined) { %>default: <%- JSON.stringify(field.default) %>,<% } %>
+  })
+  <%= field.name %>: <%- field.enum ? (field.dtype === 'enum' ? field.enum.map(v => `'${v}'`).join(' | ') : `(${field.enum.map(v => `'${v}'`).join(' | ')})[]`) : field.type || field.dtype %>;
+  <% } %>
+  <% }) %>
 
-<% if (creationConfig?.withTimestamps) { %>
+  <% if (creationConfig?.withTimestamps) { %>
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
-
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
-<% } %>
+  <% } %>
 
-<% if (creationConfig?.withSoftDelete) { %>
+  <% if (creationConfig?.withSoftDelete) { %>
   @Exclude()
   @DeleteDateColumn({ name: 'deleted_at' })
   deletedAt: Date;
-<% } %>
+  <% } %>
 
-<% if (creationConfig?.operator) { %>
+  <% if (creationConfig?.operator) { %>
+  @ManyToOne(() => User, { cascade: true, onUpdate: 'CASCADE', onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'created_by' })
+  createdBy?: User;
 
-    @ManyToOne(() => User, {
-      cascade: true,
-      onUpdate: 'CASCADE',
-      onDelete: 'SET NULL',
-      nullable: true,
-    })
-    @JoinColumn({ name: 'created_by' })
-    createdBy?: User;
+  @ManyToOne(() => User, { cascade: true, onUpdate: 'CASCADE', onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'updated_by' })
+  updatedBy?: User;
 
-    @ManyToOne(() => User, {
-      cascade: true,
-      onUpdate: 'CASCADE',
-      onDelete: 'SET NULL',
-      nullable: true,
-    })
-    @JoinColumn({ name: 'updated_by' })
-    updatedBy?: User;
-
-
-  
-
-  <% if (creationConfig?.withSoftDelete) { %>
-    @Exclude()
-    @ManyToOne(() => User, {
-      cascade: true,
-      onUpdate: 'CASCADE',
-      onDelete: 'SET NULL',
-      nullable: true,
-    })
-    @JoinColumn({ name: 'deleted_by' })
-    deletedBy?: User;
-    <% } %>
-<% } %>
-
-
+  <% if (creationConfig.withSoftDelete) { %>
+  @Exclude()
+  @ManyToOne(() => User, { cascade: true, onUpdate: 'CASCADE', onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'deleted_by' })
+  deletedBy?: User;
+  <% } %>
+  <% } %>
 
   static selectFields = {
-    id: true,
-    <% fields.forEach(field => { if (!field.relation) { %>    <%= field.name %>: true,
-      <% }}) %>
-    <% if (creationConfig) { %>
-        <% if (creationConfig.withTimestamps) { %>        
-            createdAt: true,
-            updatedAt: true,
-        <% } %>
-        <% if (creationConfig.operator) { %>    
-            createdBy: true,
-            updatedBy: true,
-            // deletedAt is excluded (excluded by @Exclude())
-        <% } %>
-    <% } %>
+    <%= primaryKeys[0] %>: true,
+    <% fields.forEach(field => { if (!field.relation) { %><%= field.name %>: true,<% } }) %>
+    <% if (creationConfig?.withTimestamps) { %>createdAt: true, updatedAt: true,<% } %>
+    <% if (creationConfig?.operator) { %>createdBy: true, updatedBy: true,<% } %>
   } as const;
 
-  static relationalFields = 
-  {
-    <% fields.forEach(field =>{ if (field.relation) { %>    <%= field.name %>: true,
-          <% }}) %>
-    <% if (creationConfig) { %>
-      <% if (creationConfig.operator) { %>  
-        createdBy: true,
-        updatedBy: true,
-    <% if (creationConfig.withSoftDelete) { %>    
-      deletedBy: true,
-    <% } } } %>
+  static relationalFields = {
+    <% fields.forEach(field => { if (field.relation) { %><%= field.name %>: true,<% } }) %>
+    <% if (creationConfig?.operator) { %>createdBy: true, updatedBy: true,<% if (creationConfig.withSoftDelete) { %>deletedBy: true,<% } %><% } %>
   } as const;
-
 }
