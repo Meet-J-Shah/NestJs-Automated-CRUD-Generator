@@ -1,1008 +1,965 @@
 import { Processor, Process } from '@nestjs/bull';
-import * as fs from 'fs';
 import { Job } from 'bull';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as ejs from 'ejs';
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import { promises as fsPromises, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import * as pluralize from 'pluralize';
 import { snakeCase, camelCase, upperFirst } from 'lodash';
-import { getApiProperty } from '../../utils/dto.helper';
-import { applyValidation } from '../../utils/dto.helper';
+import { getApiProperty, applyValidation } from '../../utils/dto.helper';
+
+import { execSync } from 'child_process';
+
+interface Field {
+  Type: string;
+  type?: string;
+  dtype?: string;
+  subTypeOptions?: {
+    subType?: string;
+    default?: any;
+    length?: number;
+    values?: string[];
+  };
+  name?: string;
+  dbName?: string;
+  unique?: boolean;
+  length?: number;
+  default?: any;
+  enum?: string[];
+  relation?: {
+    target: string;
+    type: 'OneToOne' | 'OneToMany' | 'ManyToOne' | 'ManyToMany';
+    inverseSide?: string;
+    joinColumn?: { name?: string; referencedColumnName?: string };
+    cascade?: boolean;
+    onDelete?: string;
+    onUpdate?: string;
+    nullable?: boolean;
+    uniDirectional?: boolean;
+  };
+}
+
+interface JobData {
+  name: string;
+  fields: Field[];
+  creationConfig: any;
+  primaryFields: Field[];
+  indices: any[];
+}
+
 @Processor('generate-queue')
 export class GenerateProcessor {
+  private readonly typeMap: Record<string, string> = {
+    string: 'varchar',
+    number: 'decimal(10,2)',
+    boolean: 'tinyint',
+    Date: 'timestamp',
+    int: 'int',
+    float: 'float',
+    text: 'text',
+    uuid: 'char(36)',
+  };
+
+  private readonly appPath = join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    '..',
+    'src',
+    'api',
+  );
+  private readonly templates = [
+    {
+      subDir: 'entities',
+      fileName: 'module.entity',
+      outputName: (fileName: string) => `${fileName}.entity.ts`,
+    },
+    {
+      subDir: '',
+      fileName: 'module.controller',
+      outputName: (fileName: string) => `${fileName}.controller.ts`,
+    },
+    {
+      subDir: '',
+      fileName: 'module.service',
+      outputName: (fileName: string) => `${fileName}.service.ts`,
+    },
+    {
+      subDir: '',
+      fileName: 'module.module',
+      outputName: (fileName: string) => `${fileName}.module.ts`,
+    },
+    {
+      subDir: 'dto',
+      fileName: 'module.dto',
+      outputName: (fileName: string) => `${fileName}.dto.ts`,
+    },
+    {
+      subDir: 'constants',
+      fileName: 'permission.constant',
+      outputName: () => `permission.constant.ts`,
+    },
+    {
+      subDir: '',
+      fileName: 'module.migration',
+      outputName: (fileName: string, timestamp: number) =>
+        `${timestamp}-create${fileName}Table.ts`,
+    },
+    {
+      subDir: '',
+      fileName: 'updatePermission.seeder',
+      outputName: (fileName: string, timestamp: number) =>
+        `${timestamp}-updatePermissionsTable.seeder.ts`,
+    },
+  ];
+
   @Process('generate-crud')
-  async handleGenerate(job: Job) {
+  async handleGenerate(job: Job<JobData>) {
     console.log('GenerateProcessor received job:', job.id, job.data);
 
     try {
-      const { name, fields, creationConfig, primaryFields, indices } = job.data;
-      const className = name.charAt(0).toUpperCase() + name.slice(1);
-      const camelName = className.charAt(0).toLowerCase() + className.slice(1);
-      const fileName = name.toLowerCase();
-      const dbTableName = name.toLowerCase();
-      const fileNamePlural = pluralize(fileName);
-      const entityName = className;
-      const tableName = className;
-      const entityFileName = fileName;
-      const entityVar = fileName;
-      const timestamp = Date.now();
-      const constantName = className.toUpperCase(); // <--- add this line
-      const constantFileName = `${camelName}PermissionsConstant`;
-      const typeMap = {
-        string: 'varchar',
-        number: 'decimal(10,2)',
-        boolean: 'tinyint',
-        Date: 'timestamp',
-        int: 'int',
-        float: 'float',
-        text: 'text',
-        uuid: 'char(36)',
-      };
-      for (const field of fields) {
-        if (field.Type === 'String') {
-          field.type = 'string';
-          field.dtype = field.subTypeOptions.subType || 'varchar';
-        } else if (field.Type === 'Text') {
-          field.type = 'string';
-          field.dtype = field.subTypeOptions.subType || 'text';
-        } else if (field.Type === 'Boolean') {
-          field.type = 'boolean';
-          field.dtype = field.subTypeOptions.subType || 'tinyint';
-        } else if (field.Type === 'Json') {
-          field.type = 'Record<string, any>';
-          field.dtype = field.subTypeOptions.subType || 'json';
-        } else if (field.Type === 'Enum') {
-          field.type = 'string';
-          field.dtype = field.subTypeOptions.subType || 'enum';
-          field.enum = field.subTypeOptions.values;
-        } else if (field.Type === 'Set') {
-          field.type = `string []`;
-          field.dtype = field.subTypeOptions.subType || 'simple-array';
-          field.enum = field.subTypeOptions.values;
-        } else if (field.Type === 'Uid') {
-          field.unique = true;
-          if (field.subTypeOptions.subType === 'uuid') {
-            field.dtype = 'char';
-            field.length = 36;
-          } else if (field.subTypeOptions.subType === 'bigint') {
-            field.dtype = 'bigint';
-            field.type = 'string';
-            field.length = field.subTypeOptions.length || 20;
-          } else if (field.subTypeOptions.subType === 'string') {
-            field.dtype = 'varchar';
-            field.type = 'string';
-            field.length = field.subTypeOptions.length || 20;
-          }
-        } else if (field.Type === 'DateTime') {
-          if (
-            ['date', 'datetime', 'timestamp'].includes(
-              field.subTypeOptions.subType,
-            )
-          ) {
-            field.type = 'Date';
-            field.dtype = field.subTypeOptions.subType || 'timestamp';
-          } else if (field.subTypeOptions.subType === 'time') {
-            field.type = 'string';
-            field.dtype = field.subTypeOptions.subType || 'time';
-          }
-        } else if (field.Type === 'Number') {
-          if (['bigint', 'decimal'].includes(field.subTypeOptions.subType)) {
-            field.type = 'string';
-            field.dtype = field.subTypeOptions.subType;
-          } else if (
-            ['smallint', 'int', 'float', 'double'].includes(
-              field.subTypeOptions.subType,
-            )
-          ) {
-            field.type = 'number';
-            field.dtype = field.subTypeOptions.subType || 'float';
-          }
-        } else if (field.Type === 'Relation') {
-        } else if (field.Type === 'Email') {
-          field.type = 'string';
-          field.dtype = 'varchar';
-          field.length = field.subTypeOptions.length || 255;
-        } else if (field.Type === 'Password') {
-          field.type = 'string';
-          field.dtype = 'varchar';
-          field.length = field.subTypeOptions.length || 255;
-        } else if (field.Type === 'PhoneNumber') {
-          field.type = 'string';
-          field.dtype = 'varchar';
-          field.length = field.subTypeOptions.length || 20;
-        }
-
-        if (
-          field.Type !== 'Relation' &&
-          field.subTypeOptions?.default !== undefined
-        ) {
-          field.default = field.subTypeOptions.default;
-        }
-        if (
-          field.Type !== 'Relation' &&
-          field.subTypeOptions?.length !== undefined
-        ) {
-          field.length = field.subTypeOptions.length;
-        }
-      }
-      const templateData = {
-        name,
-        fields,
-        primaryFields,
-        indices,
-        className,
-        tableName,
-        dbTableName,
-        typeMap,
-        creationConfig,
-        timestamp,
-        camelName,
-        constantFileName,
-        fileName,
-        fileNamePlural,
-        entityName,
-        entityFileName,
-        entityVar,
-        constantName, // <--- add this line
-        useBcrypt: false,
-        relatedEntityClass: '',
-        relatedEntityFileName: '',
-        hasRoleRelation: false,
-        hasUtilsModule: true,
-        hasAuthModule: true,
-        pluralize,
-        snakeCase,
-        camelCase,
-        getApiProperty,
-        applyValidation,
-        // ...any more
-      };
-
-      const appPath = join(__dirname, '..', '..', '..', '..', 'src', 'api');
-
-      const modulePath = join(appPath, fileName);
-
-      if (!existsSync(modulePath)) {
-        mkdirSync(modulePath, { recursive: true });
-        console.log('Created directory:', modulePath);
-      }
-
-      const templates = [
-        {
-          subDir: 'entities',
-          fileName: 'module.entity',
-          outputName: `${fileName}.entity.ts`,
-        },
-        {
-          subDir: '',
-          fileName: 'module.controller',
-          outputName: `${fileName}.controller.ts`,
-        },
-        {
-          subDir: '',
-          fileName: 'module.service',
-          outputName: `${fileName}.service.ts`,
-        },
-        {
-          subDir: '',
-          fileName: 'module.module',
-          outputName: `${fileName}.module.ts`,
-        },
-        {
-          subDir: 'dto',
-          fileName: 'module.dto',
-          outputName: `${fileName}.dto.ts`,
-        },
-        {
-          subDir: 'constants',
-          fileName: 'permission.constant',
-          outputName: `permission.constant.ts`,
-        },
-        {
-          subDir: '',
-          fileName: 'module.migration',
-          outputName: `${timestamp}-create${fileName}Table.ts`,
-        },
-        {
-          subDir: '',
-          fileName: 'updatePermission.seeder',
-          outputName: `${timestamp}-updatePermissionsTable.seeder.ts`,
-        },
-      ];
-      for (const tpl of templates) {
-        const templatePath = join(
-          __dirname,
-          'templates',
-          'module',
-          tpl.subDir,
-          `${tpl.fileName}.ejs`,
-        );
-        console.log('Rendering template:', templatePath);
-
-        try {
-          const output = await ejs.renderFile(templatePath, templateData);
-          if (tpl.fileName == 'module.migration') {
-            console.log('Migration is start');
-            const outputPath = join('src', 'db', 'migrations', tpl.outputName);
-            writeFileSync(outputPath, output);
-            console.log('Wrote file:', outputPath);
-            const configPath = join(
-              __dirname,
-              '..',
-              '..',
-              '..',
-              '..',
-              'src',
-              'configs',
-              'migration.config.ts',
-            );
-
-            const fileName2 = `${timestamp}-create${fileName}Table`;
-            const className = `Create${name}Table${timestamp}`;
-
-            const importLine = `import { ${className} } from '../db/migrations/${fileName2}';`;
-
-            // Read current config
-            let configText = readFileSync(configPath, 'utf-8');
-
-            // Prevent duplicate import
-            if (!configText.includes(className)) {
-              // Add import line at top
-              configText = `${importLine}\n${configText}`;
-
-              // Inject into export default array
-              configText = configText.replace(
-                /export default\s*\[/,
-                `export default [\n  ${className},`,
-              );
-
-              // Write back
-              writeFileSync(configPath, configText);
-              console.log(
-                ` Migration class "${className}" added to migration.config.ts`,
-              );
-            } else {
-              console.log(' Migration already exists in config.');
-            }
-          }
-          if (tpl.fileName == 'updatePermission.seeder') {
-            console.log('Migration is start');
-            const outputPath = join('src', 'db', 'seeders', tpl.outputName);
-            writeFileSync(outputPath, output);
-            console.log('Wrote file:', outputPath);
-          } else {
-            const subDirPath = join(modulePath, tpl.subDir);
-            if (!existsSync(subDirPath)) {
-              mkdirSync(subDirPath, { recursive: true });
-              console.log('Created directory:', subDirPath);
-            }
-            const outputPath = join(subDirPath, tpl.outputName);
-
-            writeFileSync(outputPath, output);
-            console.log('Wrote file:', outputPath);
-          }
-        } catch (err) {
-          console.error('Template/render error with', templatePath, err);
-        }
-      }
-      try {
-        const path = join(
-          __dirname,
-          '..',
-          '..',
-          '..',
-          '..',
-          'src',
-          'api',
-          'api.module.ts',
-        );
-        let content = fs.readFileSync(path, 'utf-8');
-
-        const className2 = `${className}Module`;
-        const importPath = `./${fileName}/${fileName}.module`;
-
-        // Add import line
-        if (!content.includes(importPath)) {
-          content =
-            `import { ${className2} } from '${importPath}';\n` + content;
-        }
-
-        // Insert into imports array
-        content = content.replace(
-          /imports:\s*\[/,
-          `imports: [\n    ${className2},`,
-        );
-
-        fs.writeFileSync(path, content);
-
-        // change entity config.ts
-
-        const entityPath = join(
-          __dirname,
-          '..',
-          '..',
-          '..',
-          '..',
-          'src',
-          'configs',
-          'entity.config.ts',
-        );
-
-        let content2 = fs.readFileSync(entityPath, 'utf-8');
-
-        const importLine = `import { ${name} } from '../api/${fileName}/entities/${fileName}.entity';`;
-        if (!content2.includes(importLine)) {
-          content2 = `${importLine}\n` + content2;
-        }
-
-        const exportRegex = /export\s+default\s+\[\s*([\s\S]*?)\s*\];/m;
-        const match = exportRegex.exec(content2);
-        if (match) {
-          const currentEntities = match[1];
-          if (!currentEntities.includes(entityName)) {
-            const newEntities = currentEntities.trim()
-              ? `${currentEntities.trim()},\n  ${entityName}`
-              : `  ${entityName}`;
-            const newExport = `export default [\n  ${newEntities}\n];`;
-            content2 = content2.replace(exportRegex, newExport);
-          }
-        }
-
-        fs.writeFileSync(entityPath, content2);
-      } catch (err) {
-        console.error('Error in updating api module', err);
-      }
-      for (const field of fields) {
-        if (
-          field.relation &&
-          (!field.relation.uniDirectional ||
-            field.relation.type == 'OneToMany' ||
-            field.relation.type == 'ManyToMany')
-        ) {
-          const oneToManyForeignKeys: string[] = [];
-          const oneToManyForeignKeyTypes: string[] = [];
-          const oneToManyForeignKeyDtypes: string[] = [];
-
-          const moduleName = field.relation.target.toLowerCase();
-          const relationModulePath = join(
-            appPath,
-            moduleName,
-            'entities',
-            `${moduleName}.entity.ts`,
-          );
-
-          let content = fs.readFileSync(relationModulePath, 'utf-8');
-
-          const importLine = `import { ${name} } from '../../${fileName}/entities/${fileName}.entity';\n`;
-          if (!content.includes(name)) {
-            content = importLine + content;
-          }
-          let propertyBlock = '';
-          const inverseName =
-            field.relation.inverseSide ||
-            `${fileName}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
-          //  Create the property block
-          if (field.relation.type == 'OneToOne') {
-            propertyBlock = `
-            @OneToOne(() => ${name}, (${fileName}) => ${fileName}.${field.name})
-          ${inverseName}: ${name};`;
-          } else if (field.relation.type == 'OneToMany') {
-            let joinColumnBlock = '';
-            if (
-              field.relation.joinColumn?.name ||
-              field.relation.joinColumn?.referencedColumnName
-            ) {
-              joinColumnBlock = `${JSON.stringify(field.relation.joinColumn, null, 2)}\n`;
-            }
-            const options: string[] = [];
-            if (field.relation.cascade !== undefined)
-              options.push(`cascade: ${field.relation.cascade}`);
-            if (field.relation.onDelete)
-              options.push(`onDelete: '${field.relation.onDelete}'`);
-            if (field.relation.onUpdate)
-              options.push(`onUpdate: '${field.relation.onUpdate}'`);
-            if (field.relation.nullable !== undefined)
-              options.push(`nullable: ${field.relation.nullable}`);
-            if (primaryFields && primaryFields.length > 1) {
-              const referencedColumns: string[] = [];
-              const referencedColumns2: string[] = [];
-              const columnBlock = primaryFields
-                .map((primaryField) => {
-                  referencedColumns.push(primaryField.name);
-                  referencedColumns2.push(
-                    `${dbTableName}_${primaryField.dbName || snakeCase(primaryField.name)}`,
-                  );
-                  const columnName = `${dbTableName}_${primaryField.dbName || snakeCase(primaryField.name)}`;
-                  let typeBlock;
-                  if (primaryField?.dtype === 'uuid') {
-                    const lengthblock2 = ', length: 36';
-                    const type = 'char';
-                    typeBlock = `'${type}' ${lengthblock2} `;
-                  } else {
-                    typeBlock = `'${primaryField?.dtype || 'bigint'}'`;
-                  }
-                  const aliasName = `${dbTableName}${upperFirst(camelCase(primaryField.name))}`;
-                  const type = primaryField.type || 'string';
-                  oneToManyForeignKeys.push(aliasName);
-                  oneToManyForeignKeyTypes.push(type);
-                  oneToManyForeignKeyDtypes.push(
-                    primaryField.dtype || 'bigint',
-                  );
-                  return `@Column({ name: '${columnName}', type: ${typeBlock}, nullable: true })
-                    ${aliasName}?: ${type};`;
-                })
-                .join('\n\n'); // Join multiple column blocks
-              let joinColumnsBlock = '';
-
-              referencedColumns.forEach((refCol, index) => {
-                joinColumnsBlock += `{ name: '${referencedColumns2[index]}', referencedColumnName: '${refCol}' }`;
-                if (index < referencedColumns.length - 1) {
-                  joinColumnsBlock += ',\n  ';
-                }
-              });
-
-              propertyBlock = `@ManyToOne(() => ${name}, (${fileName}) => ${fileName}.${field.name} ${options.length ? `, {\n  ${options.join(',\n  ')}\n}` : ''})
-              @JoinColumn([ ${joinColumnsBlock} ]) ${inverseName}: ${name}; ${columnBlock}`;
-            } else {
-              let typeBlock;
-              if (primaryFields?.[0]?.dtype === 'uuid') {
-                const lengthblock2 = ', length: 36';
-                const type = 'char';
-                typeBlock = `'${type}' ${lengthblock2} `;
-              } else {
-                typeBlock = `'${primaryFields?.[0]?.dtype || 'bigint'}'`;
-              }
-              if (
-                field.relation.joinColumn?.referencedColumnName === undefined ||
-                field.relation.joinColumn?.referencedColumnName ===
-                  primaryFields?.[0]?.name
-              ) {
-                joinColumnBlock = `{ name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}',
-                 referencedColumnName: '${primaryFields?.[0]?.name || 'id'}' }`;
-              } else {
-                let nameBlock = ``;
-
-                console.log(
-                  `name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}',`,
-                  'colName2',
-                );
-                nameBlock = `name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}',`;
-
-                joinColumnBlock = ` { ${nameBlock}
-                    referencedColumnName: '${primaryFields?.[0]?.name || 'id'}',
-                  }`;
-              }
-              const type = primaryFields?.[0]?.type || 'string';
-              oneToManyForeignKeyTypes.push(type);
-              oneToManyForeignKeys.push(inverseName + 'Id');
-              oneToManyForeignKeyDtypes.push(
-                primaryFields?.[0]?.dtype || 'bigint',
-              );
-              propertyBlock = `@ManyToOne(() => ${name}, (${fileName}) => ${fileName}.${field.name} ${options.length ? `, {\n  ${options.join(',\n  ')}\n}` : ''})
-              @JoinColumn( ${joinColumnBlock} ) ${inverseName}: ${name};
-              @Column({ name: '${field.relation.joinColumn?.name || dbTableName + '_' + snakeCase(primaryFields?.[0]?.name || 'id')}', type: ${typeBlock}, nullable: true })
-              ${inverseName}Id?: ${type};`;
-            }
-          } else if (field.relation.type == 'ManyToOne') {
-            propertyBlock = `
-            @OneToMany(() => ${name}, (${fileName}) => ${fileName}.${field.name})
-           ${inverseName}: ${name}[];`;
-          } else if (field.relation.type == 'ManyToMany') {
-            propertyBlock = `
-            @ManyToMany(() => ${name}, (${fileName}) => ${fileName}.${field.name})
-         ${inverseName}: ${name}[];`;
-          } else {
-            console.error('Invalid Relation Type');
-          }
-
-          const insertIndex = content.lastIndexOf('}');
-          content =
-            content.slice(0, insertIndex) +
-            propertyBlock +
-            '\n}' +
-            content.slice(insertIndex + 1);
-
-          // Match the relationalFields block
-          const match = content.match(
-            /static\s+relationalFields\s*=\s*{([\s\S]*?)}\s+as\s+const;/,
-          );
-          if (!match) {
-            const insertIndex = content.lastIndexOf('}');
-            const relationalBlock = `\n  static relationalFields = {\n    ${inverseName}: true\n  } as const;\n`;
-            content =
-              content.slice(0, insertIndex) +
-              relationalBlock +
-              content.slice(insertIndex);
-          } else {
-            const fieldsBlock = match[1].trim().replace(/,?\s*$/, '');
-            const newRelationalFields = `static relationalFields = {\n  ${fieldsBlock},\n   ${inverseName} : true\n} as const;`;
-
-            content = content.replace(
-              /static\s+relationalFields\s*=\s*{[\s\S]*?}\s*as\s+const\s*;/,
-              newRelationalFields,
-            );
-          }
-
-          if (field.relation.type === 'OneToMany') {
-            // Match the selectionFields block
-            const match = content.match(
-              /static\s+selectFields\s*=\s*{([\s\S]*?)}\s+as\s+const;/,
-            );
-            if (!match) {
-              const insertIndex = content.lastIndexOf('}');
-
-              const fieldsString = oneToManyForeignKeys
-                .map((name) => `  ${name}: true`)
-                .join(',\n');
-              const newBlock = `\n  static selectFields = {\n${fieldsString}\n  } as const;\n`;
-              content =
-                content.slice(0, insertIndex) +
-                newBlock +
-                content.slice(insertIndex);
-            } else {
-              // Update existing selectFields
-              const fieldsBlock = match[1].trim().replace(/,?\s*$/, '');
-
-              // Build new fields to append (skip duplicates)
-              const existingFields = new Set(
-                fieldsBlock
-                  .split(',')
-                  .map((line) => line.trim().split(':')[0])
-                  .filter(Boolean),
-              );
-
-              const newFields = oneToManyForeignKeys
-                .filter((name) => !existingFields.has(name))
-                .map((name) => `  ${name}: true`);
-
-              const allFields = [fieldsBlock, ...newFields].join(',\n');
-              const newSelectFields = `static selectFields = {\n${allFields}\n} as const;`;
-
-              content = content.replace(
-                /static\s+selectFields\s*=\s*{[\s\S]*?}\s*as\s+const\s*;/,
-                newSelectFields,
-              );
-            }
-          }
-
-          fs.writeFileSync(relationModulePath, content);
-
-          // write the updated dtos for one to many relations
-          if (field.relation.type === 'OneToMany') {
-            const dtoPath = join(
-              appPath,
-              moduleName,
-              'dto',
-              `${moduleName}.dto.ts`,
-            );
-            let originalContent = fs.readFileSync(dtoPath, 'utf-8');
-
-            const moduleClass =
-              field.relation.target.charAt(0).toUpperCase() +
-              field.relation.target.slice(1);
-
-            const injectProperties = (classType: 'Create' | 'Update') => {
-              const regex = new RegExp(
-                `export\\s+class\\s+${classType}${moduleClass}BodyReqDto\\b(?:\\s+extends\\s+\\w+)?\\s*{`,
-              );
-              // const match = regex.exec(originalContent);
-              const classMatch = originalContent.match(regex);
-              if (!classMatch) {
-                console.warn(
-                  `[injectProperties] Class match not found for ${classType}${moduleClass}BodyReqDto`,
-                );
-                return;
-              }
-              const matchIndex = originalContent.indexOf(classMatch[0]);
-              const openBraceIndex = originalContent.indexOf('{', matchIndex);
-
-              // Now find matching closing brace from openBraceIndex
-              let braceCount = 1;
-              let closeBraceIndex = openBraceIndex + 1;
-
-              while (
-                braceCount > 0 &&
-                closeBraceIndex < originalContent.length
-              ) {
-                const char = originalContent[closeBraceIndex];
-                if (char === '{') braceCount++;
-                else if (char === '}') braceCount--;
-                closeBraceIndex++;
-              }
-              if (!match) return;
-
-              const classStartIndex = match.index;
-              // Find where class ends (first `}` after class start)
-              const classEndIndex = content.indexOf('}', classStartIndex);
-
-              if (classEndIndex === -1) return content;
-              const propertyBlock = oneToManyForeignKeys
-                .map((name, i) => {
-                  const type = oneToManyForeignKeyDtypes[i];
-                  let typeDecorator = '@IsString()';
-                  if (type === 'bigint') {
-                    typeDecorator = ` @ApiProperty({
-                        example: '9223372036854775807',
-                        description: 'BigInt primary key field (as string)',
-                        type: 'string',
-                      })
-                      @IsString()\n  
-                      @Matches(/^\\d+$/, { message: "ID must be a string of digits"})`;
-                  } else if (type === 'uuid') {
-                    typeDecorator = `@IsUUID()
-                      @ApiProperty({
-                      example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
-                      description: 'UUID primary key field',
-                      type: 'string',
-                      format: 'uuid',
-                      })`;
-                  } else if (type === 'int') {
-                    typeDecorator = `
-                    @Type(() => Number)  
-                    @ApiProperty({
-                      example: 123,
-                      description: 'Integer primary key',
-                      type: 'integer',
-                      format: 'int32',
-                    })
-                      @IsInt()`;
-                  }
-
-                  return `
-                      ${typeDecorator}
-                      ${classType === 'Create' ? '@IsNotEmpty()' : '@IsOptional()'}
-                      ${name}${classType === 'Create' ? '' : '?'}: ${oneToManyForeignKeyTypes[i]};`;
-                })
-                .join('\n');
-
-              originalContent =
-                originalContent.slice(0, closeBraceIndex - 1) +
-                propertyBlock +
-                '\n}' +
-                originalContent.slice(closeBraceIndex);
-            };
-
-            injectProperties('Create');
-            injectProperties('Update');
-
-            fs.writeFileSync(dtoPath, originalContent);
-          }
-
-          if (field.relation.type === 'ManyToMany') {
-            const modulePath = join(
-              appPath,
-              moduleName,
-              `${moduleName}.module.ts`,
-            );
-            let moduleContent = fs.readFileSync(modulePath, 'utf-8');
-
-            //  Add import new Module if not already present
-            if (!moduleContent.includes(`${className}`)) {
-              const importRegex = /^import\s.*?;$/gm;
-              const matches = [...moduleContent.matchAll(importRegex)];
-              const lastImport = matches[matches.length - 1];
-
-              if (lastImport) {
-                const indexAfterLastImport =
-                  lastImport.index! + lastImport[0].length;
-                const entityImport = `import { ${className} } from '../${fileName}/entities/${fileName}.entity';\n`;
-                moduleContent =
-                  moduleContent.slice(0, indexAfterLastImport) +
-                  `\n${entityImport}` +
-                  moduleContent.slice(indexAfterLastImport);
-              } else {
-                // fallback: no imports found
-                const entityImport = `import { ${className} } from '../${fileName}/entities/${fileName}.entity';\n\n`;
-                moduleContent = entityImport + moduleContent;
-              }
-            }
-
-            // Add new Entity to forFeature
-            moduleContent = moduleContent.replace(
-              /TypeOrmModule\.forFeature\(\[\s*([^\]]*)\]/,
-              (match, p1) => {
-                if (p1.includes(`${className}`)) return match; // already added
-                return `TypeOrmModule.forFeature([${p1.trim() ? p1.trim() + ', ' : ''}${className}]`;
-              },
-            );
-
-            // Write back the module file
-            fs.writeFileSync(modulePath, moduleContent, 'utf-8');
-
-            const controllerPath = join(
-              appPath,
-              moduleName,
-              `${moduleName}.controller.ts`,
-            );
-
-            const methodToAdd = `
-                @Post('modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}')
-                @HttpCode(HttpStatus.OK)
-                @PermissionDecorator(${moduleName}PermissionsConstant.ADMIN_${moduleName.toUpperCase()}_CREATE)
-                  @ApiOperation({ summary: 'Modify ${field.name.charAt(0).toUpperCase() + field.name.slice(1)} (connect/disconnect IDs)' })
-                  @ApiExtraModels(MultiplePrimaryKeys${className}Dto)
-                  @ApiBody({
-                    schema: {
-                      type: 'object',
-                      properties: {
-                        connectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
-                        disconnectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
-                      },
-                    },
-                  })
-                  @ApiResponse({
-                    status: 200,
-                    description: 'modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}updated successfully.',
-                    schema: {
-                      example: {
-                        statusCode: 200,
-                        message: 'Modified ${field.name.charAt(0).toUpperCase() + field.name.slice(1)}  successfully.',
-                        data: { isAdded: true },
-                      },
-                    },
-                  })
-                async modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}(
-                  @Body('connectIds') connectIds: MultiplePrimaryKeys${className}Dto,
-                  @Body('disconnectIds') disconnectIds: MultiplePrimaryKeys${className}Dto,
-                  @Query() primaryKeyDto: PrimaryKeys${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Dto,
-                ): Promise<ControllerResDto<{ isAdded: boolean }>> {
-                  const result = await this.${moduleName}Service.modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}(
-                    connectIds,
-                    disconnectIds,
-                    primaryKeyDto,
-                  );
-                  return this.globalService.setControllerResponse(
-                    { isAdded: !!result },
-                    'Many ${field.name} modified successfully.',
-                  );
-                }
-              `;
-
-            // Read file
-            let controllerContent = fs.readFileSync(controllerPath, 'utf-8');
-
-            //  Add import new Module if not already present
-            if (
-              !controllerContent.includes(`MultiplePrimaryKeys${className}Dto`)
-            ) {
-              const entityPrimaryKeyDtoImport = `import {MultiplePrimaryKeys${className}Dto } from '../${fileName}/dto/${fileName}.dto';\n`;
-
-              // Find all import statements
-              const importRegex = /^import\s.*?;$/gm;
-              const matches = [...controllerContent.matchAll(importRegex)];
-
-              if (matches.length === 0) {
-                // No import statements, add to top
-                controllerContent =
-                  `${entityPrimaryKeyDtoImport}\n` + controllerContent;
-              } else {
-                // Insert after the last import
-                const lastImport = matches[matches.length - 1];
-                const indexAfterLastImport =
-                  lastImport.index! + lastImport[0].length;
-
-                controllerContent =
-                  controllerContent.slice(0, indexAfterLastImport) +
-                  `\n${entityPrimaryKeyDtoImport}` +
-                  controllerContent.slice(indexAfterLastImport);
-              }
-            }
-            // Check if method already exists
-            if (
-              controllerContent.includes(
-                `modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`,
-              )
-            ) {
-              console.log(' Method already exists. Skipping...');
-            }
-
-            // Find last closing brace of the controller class
-            const classEndIndex = controllerContent.lastIndexOf('}');
-
-            if (classEndIndex === -1) {
-              console.error(
-                ' Could not find closing brace of controller class.',
-              );
-            }
-
-            // Insert method before last closing brace
-            const updatedContent =
-              controllerContent.slice(0, classEndIndex) +
-              `\n${methodToAdd}\n` +
-              controllerContent.slice(classEndIndex);
-
-            // Write back to file
-            fs.writeFileSync(controllerPath, updatedContent, 'utf-8');
-
-            const serviceToAdd = `
-           
-                async modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}(
-                  connectIds: MultiplePrimaryKeys${className}Dto,
-                  disconnectIds: MultiplePrimaryKeys${className}Dto,
-                  primaryKeyFields:PrimaryKeys${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Dto,
-                ) {
-                  const where${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Conditions = primaryKeyFields as unknown as FindOptionsWhere<${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}>[];
-                  const ${moduleName} = await this.${moduleName}Repository.findOne({
-                    where: where${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Conditions,
-                    relations: ['${className.toLowerCase() + field.name.charAt(0).toUpperCase() + field.name.slice(1)}'], 
-                  });
-
-                  if (!${moduleName}) throw new NotFoundException('${moduleName} not found');
-
-                  // get  the  entities for removing from relation
-                  const whereConditions = disconnectIds.items as FindOptionsWhere<${className}>[];
-                  let ${className.toLowerCase()}sToRemove: ${className}[] = [];
-                  if (Array.isArray(whereConditions) && whereConditions.length > 0) {
-                    ${className.toLowerCase()}sToRemove = await this.${className.toLowerCase()}Repository.find({
-                      where: whereConditions,
-                    });
-                  }
-
-                  if (${className.toLowerCase()}sToRemove?.length !== disconnectIds.items.length) {
-                    throw new NotFoundException(
-                      ' In the disconnectIds  some or all ${className} not found',
-                    );
-                  }
-
-                  // get  the  entities for adding to relation
-                  const whereConditionsToAdd = connectIds.items as FindOptionsWhere<${className}>[];
-                  let ${className.toLowerCase()}sToAdd: ${className}[] = [];
-                  if (
-                    Array.isArray(whereConditionsToAdd) &&
-                    whereConditionsToAdd.length > 0
-                  ) {
-                    ${className.toLowerCase()}sToAdd = await this.${className.toLowerCase()}Repository.find({
-                      where: whereConditionsToAdd,
-                    });
-                  }
-
-                  if (${className.toLowerCase()}sToAdd?.length !== connectIds.items.length) {
-                    throw new NotFoundException(
-                      'In the connectIds  some or all ${className} not found',
-                    );
-                  }
-                  const ${className.toLowerCase()}Meta = this.${className.toLowerCase()}Repository.metadata;
-
-                  ${moduleName}['${className.toLowerCase() + field.name.charAt(0).toUpperCase() + field.name.slice(1)}'] = syncManyToManyRelation(
-                    ${moduleName}['${className.toLowerCase() + field.name.charAt(0).toUpperCase() + field.name.slice(1)}'],
-                    ${className.toLowerCase()}sToAdd,
-                    ${className.toLowerCase()}sToRemove,
-                    ${className.toLowerCase()}Meta,
-                  );
-
-                  return await this.${moduleName}Repository.save(${moduleName});
-                } 
-          `;
-
-            const servicePath = join(
-              appPath,
-              moduleName,
-              `${moduleName}.service.ts`,
-            );
-
-            // Read file
-            let serviceContent = fs.readFileSync(servicePath, 'utf-8');
-
-            let importContent = ``;
-
-            if (
-              !serviceContent.includes(`MultiplePrimaryKeys${className}Dto`)
-            ) {
-              const entityMultiplePrimaryKeyDtoImport = `import {MultiplePrimaryKeys${className}Dto } from '../${fileName}/dto/${fileName}.dto';\n`;
-
-              importContent = importContent + entityMultiplePrimaryKeyDtoImport;
-            }
-            if (
-              !serviceContent.includes(
-                `PrimaryKeys${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Dto`,
-              )
-            ) {
-              const entityPrimaryKeyDtoImport = `import {PrimaryKeys${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Dto } from '../${moduleName}/dto/${moduleName}.dto';\n`;
-
-              importContent = importContent + entityPrimaryKeyDtoImport;
-            }
-            if (!serviceContent.includes(`syncManyToManyRelation`)) {
-              const syncManyToManyRelationImport = `import {syncManyToManyRelation} from '../../utils/relation-utils';\n`;
-
-              importContent = importContent + syncManyToManyRelationImport;
-            }
-            if (!serviceContent.includes('NotFoundException')) {
-              const notFoundExceptionImport = `import {NotFoundException} from '@nestjs/common';\n`;
-
-              importContent = importContent + notFoundExceptionImport;
-            }
-            if (!serviceContent.includes(`${className}`)) {
-              const entityImport = `import { ${className} } from '../${fileName}/entities/${fileName}.entity';\n`;
-
-              importContent = importContent + entityImport;
-            }
-            if (
-              !serviceContent.includes(`MultiplePrimaryKeys${className}Dto`) ||
-              !serviceContent.includes(
-                `PrimaryKeys${moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}Dto`,
-              ) ||
-              !serviceContent.includes(`syncManyToManyRelation`) ||
-              !serviceContent.includes('NotFoundException') ||
-              !serviceContent.includes(`${className}`)
-            ) {
-              // Find all import statements
-              const importRegex = /^import\s.*?;$/gm;
-              const matches = [...serviceContent.matchAll(importRegex)];
-
-              if (matches.length === 0) {
-                // No import statements, add to top
-                serviceContent = `${importContent}\n` + serviceContent;
-              } else {
-                // Insert after the last import
-                const lastImport = matches[matches.length - 1];
-                const indexAfterLastImport =
-                  lastImport.index! + lastImport[0].length;
-
-                serviceContent =
-                  serviceContent.slice(0, indexAfterLastImport) +
-                  `\n${importContent}` +
-                  serviceContent.slice(indexAfterLastImport);
-              }
-            }
-            const RepoLine = `@InjectRepository(${className})\n    private ${className.toLowerCase()}Repository: Repository<${className}>,\n`;
-
-            if (
-              !serviceContent.includes(`${className.toLowerCase()}Repository`)
-            ) {
-              serviceContent = serviceContent.replace(
-                /constructor\s*\(\s*([\s\S]*?)\)/,
-                (match, params) => {
-                  return `constructor(\n${RepoLine}${params})`;
-                },
-              );
-            }
-
-            if (
-              serviceContent.includes(
-                `modify${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`,
-              )
-            ) {
-              console.log(' Method already exists. Skipping...');
-            }
-
-            // Find last closing brace of the controller class
-            const serviceClassEndIndex = serviceContent.lastIndexOf('}');
-
-            if (serviceClassEndIndex === -1) {
-              console.error(
-                ' Could not find closing brace of controller class.',
-              );
-            }
-
-            // Insert method before last closing brace
-            const updatedServiceContent =
-              serviceContent.slice(0, serviceClassEndIndex) +
-              `\n${serviceToAdd}\n` +
-              serviceContent.slice(serviceClassEndIndex);
-            // Write back to file
-            fs.writeFileSync(servicePath, updatedServiceContent, 'utf-8');
-          }
-        }
-      }
-      execSync('npm run build');
-      execSync('npm run format');
-      execSync(
-        `npx typeorm-ts-node-commonjs migration:run -d dist/src/data-source.js`,
-        {
-          stdio: 'inherit',
-        },
+      const templateData = this.prepareTemplateData(job.data);
+      const modulePath = join(this.appPath, templateData.fileName);
+      await this.ensureDirectory(modulePath);
+
+      // Process templates in parallel
+      await Promise.all(
+        this.templates.map((tpl) =>
+          this.processTemplate(tpl, templateData, modulePath),
+        ),
       );
-      execSync('npm run seed:config');
-      execSync(`npm run seed:run -- -- seed=${className}Seeder`);
+
+      // Update configuration files
+      await Promise.all([
+        this.updateApiModule(templateData),
+        this.updateEntityConfig(templateData),
+        this.processRelationFields(templateData),
+      ]);
+
+      // Run build and migration commands
+      await this.runBuildAndMigrationCommands(templateData);
 
       console.log('Job processed successfully:', job.id);
       await job.moveToCompleted('done', true);
       return { status: 'done' };
     } catch (err) {
       console.error('Error in GenerateProcessor:', err);
-      await job.moveToFailed(err);
+      await job.moveToFailed(err as Error);
       throw err;
+    }
+  }
+
+  private prepareTemplateData(data: JobData) {
+    const { name, fields, creationConfig, primaryFields, indices } = data;
+    const className = upperFirst(name);
+    const camelName = camelCase(className);
+    const fileName = name.toLowerCase();
+    const fileNamePlural = pluralize(fileName);
+    const dbTableName = fileName;
+    const entityName = className;
+    const tableName = className;
+    const entityFileName = fileName;
+    const entityVar = fileName;
+    const timestamp = Date.now();
+    const constantName = className.toUpperCase();
+    const constantFileName = `${camelName}PermissionsConstant`;
+
+    this.normalizeFields(fields);
+
+    return {
+      name,
+      fields,
+      primaryFields,
+      indices,
+      className,
+      tableName,
+      dbTableName,
+      typeMap: this.typeMap,
+      creationConfig,
+      timestamp,
+      camelName,
+      constantFileName,
+      fileName,
+      fileNamePlural,
+      entityName,
+      entityFileName,
+      entityVar,
+      constantName,
+      useBcrypt: false,
+      relatedEntityClass: '',
+      relatedEntityFileName: '',
+      hasRoleRelation: false,
+      hasUtilsModule: true,
+      hasAuthModule: true,
+      pluralize,
+      snakeCase,
+      camelCase,
+      getApiProperty,
+      applyValidation,
+    };
+  }
+
+  private normalizeFields(fields: Field[]) {
+    for (const field of fields) {
+      const { Type, subTypeOptions = {} } = field;
+      const setFieldProps = (
+        type: string,
+        dtype: string,
+        additional?: Partial<Field>,
+      ) => {
+        field.type = type;
+        field.dtype = dtype;
+        Object.assign(field, additional);
+      };
+
+      switch (Type) {
+        case 'String':
+          setFieldProps('string', subTypeOptions.subType || 'varchar');
+          break;
+        case 'Text':
+          setFieldProps('string', subTypeOptions.subType || 'text');
+          break;
+        case 'Boolean':
+          setFieldProps('boolean', subTypeOptions.subType || 'tinyint');
+          break;
+        case 'Json':
+          setFieldProps(
+            'Record<string, any>',
+            subTypeOptions.subType || 'json',
+          );
+          break;
+        case 'Enum':
+          setFieldProps('string', subTypeOptions.subType || 'enum', {
+            enum: subTypeOptions.values,
+          });
+          break;
+        case 'Set':
+          setFieldProps('string[]', subTypeOptions.subType || 'simple-array', {
+            enum: subTypeOptions.values,
+          });
+          break;
+        case 'Uid':
+          field.unique = true;
+          if (subTypeOptions.subType === 'uuid') {
+            setFieldProps('string', 'char', { length: 36 });
+          } else if (subTypeOptions.subType === 'bigint') {
+            setFieldProps('string', 'bigint', {
+              length: subTypeOptions.length || 20,
+            });
+          } else if (subTypeOptions.subType === 'string') {
+            setFieldProps('string', 'varchar', {
+              length: subTypeOptions.length || 20,
+            });
+          }
+          break;
+        case 'DateTime':
+          if (
+            ['date', 'datetime', 'timestamp'].includes(
+              subTypeOptions.subType || '',
+            )
+          ) {
+            setFieldProps('Date', subTypeOptions.subType || 'timestamp');
+          } else if (subTypeOptions.subType === 'time') {
+            setFieldProps('string', subTypeOptions.subType || 'time');
+          }
+          break;
+        case 'Number':
+          if (['bigint', 'decimal'].includes(subTypeOptions.subType || '')) {
+            setFieldProps('string', subTypeOptions.subType);
+          } else if (
+            ['smallint', 'int', 'float', 'double'].includes(
+              subTypeOptions.subType || '',
+            )
+          ) {
+            setFieldProps('number', subTypeOptions.subType || 'float');
+          }
+          break;
+        case 'Email':
+        case 'Password':
+        case 'PhoneNumber':
+          setFieldProps('string', 'varchar', {
+            length:
+              subTypeOptions.length || (Type === 'PhoneNumber' ? 20 : 255),
+          });
+          break;
+      }
+
+      if (Type !== 'Relation' && subTypeOptions.default !== undefined) {
+        field.default = subTypeOptions.default;
+      }
+      if (Type !== 'Relation' && subTypeOptions.length !== undefined) {
+        field.length = subTypeOptions.length;
+      }
+    }
+  }
+
+  private async ensureDirectory(path: string) {
+    if (!existsSync(path)) {
+      mkdirSync(path, { recursive: true });
+      console.log('Created directory:', path);
+    }
+  }
+
+  private async processTemplate(
+    template: {
+      subDir: string;
+      fileName: string;
+      outputName: (fileName: string, timestamp?: number) => string;
+    },
+    templateData: any,
+    modulePath: string,
+  ) {
+    const templatePath = join(
+      __dirname,
+      'templates',
+      'module',
+      template.subDir,
+      `${template.fileName}.ejs`,
+    );
+    console.log('Rendering template:', templatePath);
+
+    try {
+      const output = await ejs.renderFile(templatePath, templateData);
+      const outputPath =
+        template.fileName === 'module.migration'
+          ? join(
+              'src',
+              'db',
+              'migrations',
+              template.outputName(
+                templateData.fileName,
+                templateData.timestamp,
+              ),
+            )
+          : template.fileName === 'updatePermission.seeder'
+            ? join(
+                'src',
+                'db',
+                'seeders',
+                template.outputName(
+                  templateData.fileName,
+                  templateData.timestamp,
+                ),
+              )
+            : join(
+                modulePath,
+                template.subDir,
+                template.outputName(templateData.fileName),
+              );
+
+      await this.ensureDirectory(join(modulePath, template.subDir));
+      await fsPromises.writeFile(outputPath, output);
+      console.log('Wrote file:', outputPath);
+
+      if (template.fileName === 'module.migration') {
+        await this.updateMigrationConfig(
+          templateData,
+          `${templateData.timestamp}-create${templateData.fileName}Table`,
+        );
+      }
+    } catch (err) {
+      console.error('Template/render error with', templatePath, err);
+      throw err;
+    }
+  }
+
+  private async updateMigrationConfig(
+    templateData: any,
+    migrationFileName: string,
+  ) {
+    const configPath = join(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      '..',
+      'src',
+      'configs',
+      'migration.config.ts',
+    );
+    const className = `Create${templateData.name}Table${templateData.timestamp}`;
+    const importLine = `import { ${className} } from '../db/migrations/${migrationFileName}';`;
+
+    let configText = await fsPromises.readFile(configPath, 'utf-8');
+
+    if (!configText.includes(className)) {
+      // Add import at the top
+      configText = `${importLine}\n${configText}`;
+
+      // Append className at the end of the default array
+      configText = configText.replace(
+        /export default\s*\[\s*([\s\S]*?)\s*\]/,
+        (match, items) => {
+          const trimmed = items.trim();
+          const needsComma = trimmed && !trimmed.endsWith(',');
+          return `export default [\n  ${items}${needsComma ? ',' : ''}\n  ${className},\n]`;
+        },
+      );
+      await fsPromises.writeFile(configPath, configText);
+      console.log(
+        `Migration class "${className}" added to migration.config.ts`,
+      );
+    } else {
+      console.log('Migration already exists in config.');
+    }
+  }
+
+  private async updateApiModule(templateData: any) {
+    const path = join(this.appPath, 'api.module.ts');
+    let content = await fsPromises.readFile(path, 'utf-8');
+    const className = `${templateData.className}Module`;
+    const importPath = `./${templateData.fileName}/${templateData.fileName}.module`;
+
+    if (!content.includes(importPath)) {
+      content = `import { ${className} } from '${importPath}';\n${content}`;
+      content = content.replace(
+        /imports:\s*\[/,
+        `imports: [\n    ${className},`,
+      );
+      await fsPromises.writeFile(path, content);
+    }
+  }
+
+  private async updateEntityConfig(templateData: any) {
+    const entityPath = join(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      '..',
+      'src',
+      'configs',
+      'entity.config.ts',
+    );
+    let content = await fsPromises.readFile(entityPath, 'utf-8');
+    const importLine = `import { ${templateData.name} } from '../api/${templateData.fileName}/entities/${templateData.fileName}.entity';`;
+
+    if (!content.includes(importLine)) {
+      content = `${importLine}\n${content}`;
+      const exportRegex = /export\s+default\s+\[\s*([\s\S]*?)\s*\];/m;
+      const match = exportRegex.exec(content);
+      if (match) {
+        const currentEntities = match[1];
+        if (!currentEntities.includes(templateData.entityName)) {
+          const newEntities = currentEntities.trim()
+            ? `${currentEntities.trim()},\n  ${templateData.entityName}`
+            : `  ${templateData.entityName}`;
+          content = content.replace(
+            exportRegex,
+            `export default [\n  ${newEntities}\n];`,
+          );
+        }
+      }
+      await fsPromises.writeFile(entityPath, content);
+    }
+  }
+
+  private async processRelationFields(templateData: any) {
+    for (const field of templateData.fields) {
+      if (
+        field.relation &&
+        (!field.relation.uniDirectional ||
+          field.relation.type === 'OneToMany' ||
+          field.relation.type === 'ManyToMany')
+      ) {
+        await this.handleRelationField(field, templateData);
+      }
+    }
+  }
+
+  private async handleRelationField(field: Field, templateData: any) {
+    const moduleName = field.relation!.target.toLowerCase();
+    const relationModulePath = join(
+      this.appPath,
+      moduleName,
+      'entities',
+      `${moduleName}.entity.ts`,
+    );
+    let content = await fsPromises.readFile(relationModulePath, 'utf-8');
+
+    const importLine = `import { ${templateData.name} } from '../../${templateData.fileName}/entities/${templateData.fileName}.entity';\n`;
+    if (!content.includes(templateData.name)) {
+      content = importLine + content;
+    }
+
+    const inverseName =
+      field.relation!.inverseSide ||
+      `${templateData.fileName}${upperFirst(field.name!)}`;
+    let propertyBlock = '';
+
+    if (field.relation!.type === 'OneToOne') {
+      propertyBlock = `
+        @OneToOne(() => ${templateData.name}, (${templateData.fileName}) => ${templateData.fileName}.${field.name})
+        ${inverseName}: ${templateData.name};`;
+    } else if (field.relation!.type === 'OneToMany') {
+      propertyBlock = this.generateOneToManyPropertyBlock(field, templateData);
+      await this.updateDtoForOneToMany(field, templateData);
+    } else if (field.relation!.type === 'ManyToOne') {
+      propertyBlock = `
+        @OneToMany(() => ${templateData.name}, (${templateData.fileName}) => ${templateData.fileName}.${field.name})
+        ${inverseName}: ${templateData.name}[];`;
+    } else if (field.relation!.type === 'ManyToMany') {
+      propertyBlock = `
+        @ManyToMany(() => ${templateData.name}, (${templateData.fileName}) => ${templateData.fileName}.${field.name})
+        ${inverseName}: ${templateData.name}[];`;
+      await this.updateModuleAndControllerForManyToMany(field, templateData);
+    }
+
+    content =
+      content.slice(0, content.lastIndexOf('}')) +
+      propertyBlock +
+      '\n' +
+      content.slice(content.lastIndexOf('}'));
+
+    // Update relationalFields
+    const relationalFieldsMatch = content.match(
+      /static\s+relationalFields\s*=\s*{([\s\S]*?)}\s+as\s+const;/,
+    );
+    if (!relationalFieldsMatch) {
+      content =
+        content.slice(0, content.lastIndexOf('}')) +
+        `\n  static relationalFields = {\n    ${inverseName}: true\n  } as const;\n` +
+        content.slice(content.lastIndexOf('}'));
+    } else {
+      const fieldsBlock = relationalFieldsMatch[1].trim().replace(/,?\s*$/, '');
+      content = content.replace(
+        /static\s+relationalFields\s*=\s*{[\s\S]*?}\s*as\s+const\s*;/,
+        `static relationalFields = {\n  ${fieldsBlock},\n   ${inverseName} : true\n} as const;`,
+      );
+    }
+
+    if (field.relation!.type === 'OneToMany') {
+      const oneToManyForeignKeys = this.getOneToManyForeignKeys(
+        field,
+        templateData,
+      );
+      const selectFieldsMatch = content.match(
+        /static\s+selectFields\s*=\s*{([\s\S]*?)}\s+as\s+const;/,
+      );
+      if (!selectFieldsMatch) {
+        const fieldsString = oneToManyForeignKeys
+          .map((name) => `  ${name}: true`)
+          .join(',\n');
+        content =
+          content.slice(0, content.lastIndexOf('}')) +
+          `\n  static selectFields = {\n${fieldsString}\n  } as const;\n` +
+          content.slice(content.lastIndexOf('}'));
+      } else {
+        const fieldsBlock = selectFieldsMatch[1].trim().replace(/,?\s*$/, '');
+        const existingFields = new Set(
+          fieldsBlock
+            .split(',')
+            .map((line) => line.trim().split(':')[0])
+            .filter(Boolean),
+        );
+        const newFields = oneToManyForeignKeys
+          .filter((name) => !existingFields.has(name))
+          .map((name) => `  ${name}: true`);
+        content = content.replace(
+          /static\s+selectFields\s*=\s*{[\s\S]*?}\s*as\s+const\s*;/,
+          `static selectFields = {\n${[fieldsBlock, ...newFields].join(',\n')}\n} as const;`,
+        );
+      }
+    }
+
+    await fsPromises.writeFile(relationModulePath, content);
+  }
+
+  private generateOneToManyPropertyBlock(field: Field, templateData: any) {
+    const options: string[] = [];
+    if (field.relation!.cascade !== undefined)
+      options.push(`cascade: ${field.relation!.cascade}`);
+    if (field.relation!.onDelete)
+      options.push(`onDelete: '${field.relation!.onDelete}'`);
+    if (field.relation!.onUpdate)
+      options.push(`onUpdate: '${field.relation!.onUpdate}'`);
+    if (field.relation!.nullable !== undefined)
+      options.push(`nullable: ${field.relation!.nullable}`);
+
+    const primaryFields = templateData.primaryFields;
+    const dbTableName = templateData.dbTableName;
+    const inverseName =
+      field.relation!.inverseSide ||
+      `${templateData.fileName}${upperFirst(field.name!)}`;
+
+    if (primaryFields && primaryFields.length > 1) {
+      const referencedColumns = primaryFields.map((pf: Field) => pf.name);
+      const referencedColumns2 = primaryFields.map(
+        (pf: Field) => `${dbTableName}_${pf.dbName || snakeCase(pf.name)}`,
+      );
+      const columnBlock = primaryFields
+        .map((pf: Field) => {
+          const columnName = `${dbTableName}_${pf.dbName || snakeCase(pf.name)}`;
+          const typeBlock =
+            pf.dtype === 'uuid'
+              ? `'char', length: 36`
+              : `'${pf.dtype || 'bigint'}'`;
+          const aliasName = `${dbTableName}${upperFirst(camelCase(pf.name))}`;
+          return `@Column({ name: '${columnName}', type: ${typeBlock}, nullable: true })
+          ${aliasName}?: ${pf.type || 'string'};`;
+        })
+        .join('\n\n');
+
+      const joinColumnsBlock = referencedColumns
+        .map(
+          (refCol, index) =>
+            `{ name: '${referencedColumns2[index]}', referencedColumnName: '${refCol}' }`,
+        )
+        .join(',\n  ');
+
+      return `@ManyToOne(() => ${templateData.name}, (${templateData.fileName}) => ${templateData.fileName}.${field.name}${options.length ? `, {\n  ${options.join(',\n  ')}\n}` : ''})
+        @JoinColumn([ ${joinColumnsBlock} ]) ${inverseName}: ${templateData.name}; ${columnBlock}`;
+    } else {
+      const typeBlock =
+        primaryFields?.[0]?.dtype === 'uuid'
+          ? `'char', length: 36`
+          : `'${primaryFields?.[0]?.dtype || 'bigint'}'`;
+      const joinColumnName =
+        field.relation!.joinColumn?.name ||
+        `${dbTableName}_${snakeCase(primaryFields?.[0]?.name || 'id')}`;
+      const joinColumnBlock = `{ name: '${joinColumnName}', referencedColumnName: '${primaryFields?.[0]?.name || 'id'}' }`;
+      return `@ManyToOne(() => ${templateData.name}, (${templateData.fileName}) => ${templateData.fileName}.${field.name}${options.length ? `, {\n  ${options.join(',\n  ')}\n}` : ''})
+        @JoinColumn(${joinColumnBlock}) ${inverseName}: ${templateData.name};
+        @Column({ name: '${joinColumnName}', type: ${typeBlock}, nullable: true })
+        ${inverseName}Id?: ${primaryFields?.[0]?.type || 'string'};`;
+    }
+  }
+
+  private getOneToManyForeignKeys(field: Field, templateData: any) {
+    const primaryFields = templateData.primaryFields;
+    const dbTableName = templateData.dbTableName;
+    const inverseName =
+      field.relation!.inverseSide ||
+      `${templateData.fileName}${upperFirst(field.name!)}`;
+    const keys: string[] = [];
+
+    if (primaryFields && primaryFields.length > 1) {
+      primaryFields.forEach((pf: Field) => {
+        const aliasName = `${dbTableName}${upperFirst(camelCase(pf.name))}`;
+        keys.push(aliasName);
+      });
+    } else {
+      keys.push(`${inverseName}Id`);
+    }
+    return keys;
+  }
+
+  private async updateDtoForOneToMany(field: Field, templateData: any) {
+    const moduleName = field.relation!.target.toLowerCase();
+    const dtoPath = join(
+      this.appPath,
+      moduleName,
+      'dto',
+      `${moduleName}.dto.ts`,
+    );
+    let content = await fsPromises.readFile(dtoPath, 'utf-8');
+
+    const oneToManyForeignKeys = this.getOneToManyForeignKeys(
+      field,
+      templateData,
+    );
+    const oneToManyForeignKeyTypes = oneToManyForeignKeys.map(
+      (_, i) => templateData.primaryFields[i]?.type || 'string',
+    );
+    const oneToManyForeignKeyDtypes = oneToManyForeignKeys.map(
+      (_, i) => templateData.primaryFields[i]?.dtype || 'bigint',
+    );
+
+    const injectProperties = (classType: 'Create' | 'Update') => {
+      const regex = new RegExp(
+        `export\\s+class\\s+${classType}${upperFirst(moduleName)}BodyReqDto\\b(?:\\s+extends\\s+\\w+)?\\s*{`,
+      );
+      const classMatch = content.match(regex);
+      if (!classMatch) {
+        console.warn(
+          `[injectProperties] Class ${classType}${upperFirst(moduleName)}BodyReqDto not found`,
+        );
+        return;
+      }
+
+      const matchIndex = content.indexOf(classMatch[0]);
+      const openBraceIndex = content.indexOf('{', matchIndex);
+      let braceCount = 1;
+      let closeBraceIndex = openBraceIndex + 1;
+
+      while (braceCount > 0 && closeBraceIndex < content.length) {
+        const char = content[closeBraceIndex];
+        if (char === '{') braceCount++;
+        else if (char === '}') braceCount--;
+        closeBraceIndex++;
+      }
+
+      const propertyBlock = oneToManyForeignKeys
+        .map((name, i) => {
+          const type = oneToManyForeignKeyDtypes[i];
+          let typeDecorator = '@IsString()';
+          if (type === 'bigint') {
+            typeDecorator = `@ApiProperty({ example: '9223372036854775807', description: 'BigInt primary key field (as string)', type: 'string' })
+            @IsString()
+            @Matches(/^\\d+$/, { message: "ID must be a string of digits"})`;
+          } else if (type === 'uuid') {
+            typeDecorator = `@IsUUID()
+            @ApiProperty({ example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', description: 'UUID primary key field', type: 'string', format: 'uuid' })`;
+          } else if (type === 'int') {
+            typeDecorator = `@Type(() => Number)
+            @ApiProperty({ example: 123, description: 'Integer primary key', type: 'integer', format: 'int32' })
+            @IsInt()`;
+          }
+
+          return `${typeDecorator}
+          ${classType === 'Create' ? '@IsNotEmpty()' : '@IsOptional()'}
+          ${name}${classType === 'Create' ? '' : '?'}: ${oneToManyForeignKeyTypes[i]};`;
+        })
+        .join('\n');
+
+      content =
+        content.slice(0, closeBraceIndex - 1) +
+        propertyBlock +
+        '\n}' +
+        content.slice(closeBraceIndex);
+    };
+
+    injectProperties('Create');
+    injectProperties('Update');
+    await fsPromises.writeFile(dtoPath, content);
+  }
+
+  private async updateModuleAndControllerForManyToMany(
+    field: Field,
+    templateData: any,
+  ) {
+    const moduleName = field.relation!.target.toLowerCase();
+    const className = templateData.className;
+
+    // Update module
+    const modulePath = join(
+      this.appPath,
+      moduleName,
+      `${moduleName}.module.ts`,
+    );
+    let moduleContent = await fsPromises.readFile(modulePath, 'utf-8');
+
+    if (!moduleContent.includes(className)) {
+      const importLine = `import { ${className} } from '../${templateData.fileName}/entities/${templateData.fileName}.entity';\n`;
+      const importRegex = /^import\s.*?;$/gm;
+      const matches = [...moduleContent.matchAll(importRegex)];
+      const lastImport = matches[matches.length - 1];
+      if (lastImport) {
+        moduleContent =
+          moduleContent.slice(0, lastImport.index! + lastImport[0].length) +
+          `\n${importLine}` +
+          moduleContent.slice(lastImport.index! + lastImport[0].length);
+      } else {
+        moduleContent = importLine + moduleContent;
+      }
+
+      moduleContent = moduleContent.replace(
+        /TypeOrmModule\.forFeature\(\[\s*([^\]]*)\]/,
+        (match, p1) =>
+          p1.includes(className)
+            ? match
+            : `TypeOrmModule.forFeature([${p1.trim() ? p1.trim() + ', ' : ''}${className}]`,
+      );
+
+      await fsPromises.writeFile(modulePath, moduleContent);
+    }
+
+    // Update controller
+    const controllerPath = join(
+      this.appPath,
+      moduleName,
+      `${moduleName}.controller.ts`,
+    );
+    let controllerContent = await fsPromises.readFile(controllerPath, 'utf-8');
+
+    if (!controllerContent.includes(`MultiplePrimaryKeys${className}Dto`)) {
+      const importLine = `import { MultiplePrimaryKeys${className}Dto } from '../${templateData.fileName}/dto/${templateData.fileName}.dto';\n`;
+      const importRegex = /^import\s.*?;$/gm;
+      const matches = [...controllerContent.matchAll(importRegex)];
+      const lastImport = matches[matches.length - 1];
+      if (lastImport) {
+        controllerContent =
+          controllerContent.slice(0, lastImport.index! + lastImport[0].length) +
+          `\n${importLine}` +
+          controllerContent.slice(lastImport.index! + lastImport[0].length);
+      } else {
+        controllerContent = importLine + controllerContent;
+      }
+    }
+
+    const methodName = `modify${upperFirst(field.name!)}`;
+    if (!controllerContent.includes(methodName)) {
+      const methodToAdd = `
+        @Post('modify${upperFirst(field.name!)}')
+        @HttpCode(HttpStatus.OK)
+        @PermissionDecorator(${moduleName}PermissionsConstant.ADMIN_${moduleName.toUpperCase()}_CREATE)
+        @ApiOperation({ summary: 'Modify ${upperFirst(field.name!)} (connect/disconnect IDs)' })
+        @ApiExtraModels(MultiplePrimaryKeys${className}Dto)
+        @ApiBody({
+          schema: {
+            type: 'object',
+            properties: {
+              connectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
+              disconnectIds: { $ref: getSchemaPath(MultiplePrimaryKeys${className}Dto) },
+            },
+          },
+        })
+        @ApiResponse({
+          status: 200,
+          description: 'modify${upperFirst(field.name!)} updated successfully.',
+          schema: {
+            example: {
+              statusCode: 200,
+              message: 'Modified ${upperFirst(field.name!)} successfully.',
+              data: { isAdded: true },
+            },
+          },
+        })
+        async ${methodName}(
+          @Body('connectIds') connectIds: MultiplePrimaryKeys${className}Dto,
+          @Body('disconnectIds') disconnectIds: MultiplePrimaryKeys${className}Dto,
+          @Query() primaryKeyDto: PrimaryKeys${upperFirst(moduleName)}Dto,
+        ): Promise<ControllerResDto<{ isAdded: boolean }>> {
+          const result = await this.${moduleName}Service.${methodName}(
+            connectIds,
+            disconnectIds,
+            primaryKeyDto,
+          );
+          return this.globalService.setControllerResponse(
+            { isAdded: !!result },
+            'Many ${field.name} modified successfully.',
+          );
+        }`;
+
+      controllerContent =
+        controllerContent.slice(0, controllerContent.lastIndexOf('}')) +
+        `\n${methodToAdd}\n` +
+        controllerContent.slice(controllerContent.lastIndexOf('}'));
+      await fsPromises.writeFile(controllerPath, controllerContent);
+    }
+
+    // Update service
+    const servicePath = join(
+      this.appPath,
+      moduleName,
+      `${moduleName}.service.ts`,
+    );
+    let serviceContent = await fsPromises.readFile(servicePath, 'utf-8');
+
+    let importContent = '';
+    if (!serviceContent.includes(`MultiplePrimaryKeys${className}Dto`)) {
+      importContent += `import { MultiplePrimaryKeys${className}Dto } from '../${templateData.fileName}/dto/${templateData.fileName}.dto';\n`;
+    }
+    if (!serviceContent.includes(`PrimaryKeys${upperFirst(moduleName)}Dto`)) {
+      importContent += `import { PrimaryKeys${upperFirst(moduleName)}Dto } from '../${moduleName}/dto/${moduleName}.dto';\n`;
+    }
+    if (!serviceContent.includes(`syncManyToManyRelation`)) {
+      importContent += `import { syncManyToManyRelation } from '../../utils/relation-utils';\n`;
+    }
+    if (!serviceContent.includes('NotFoundException')) {
+      importContent += `import { NotFoundException } from '@nestjs/common';\n`;
+    }
+    if (!serviceContent.includes(className)) {
+      importContent += `import { ${className} } from '../${templateData.fileName}/entities/${templateData.fileName}.entity';\n`;
+    }
+
+    if (importContent) {
+      const importRegex = /^import\s.*?;$/gm;
+      const matches = [...serviceContent.matchAll(importRegex)];
+      const lastImport = matches[matches.length - 1];
+      if (lastImport) {
+        serviceContent =
+          serviceContent.slice(0, lastImport.index! + lastImport[0].length) +
+          `\n${importContent}` +
+          serviceContent.slice(lastImport.index! + lastImport[0].length);
+      } else {
+        serviceContent = importContent + serviceContent;
+      }
+    }
+
+    if (
+      !serviceContent.includes(
+        `${templateData.className.toLowerCase()}Repository`,
+      )
+    ) {
+      const repoLine = `@InjectRepository(${className})\n    private ${templateData.className.toLowerCase()}Repository: Repository<${className}>,\n`;
+      serviceContent = serviceContent.replace(
+        /constructor\s*\(\s*([\s\S]*?)\)/,
+        (match, params) => `constructor(\n${repoLine}${params})`,
+      );
+    }
+
+    if (!serviceContent.includes(methodName)) {
+      const serviceToAdd = `
+        async ${methodName}(
+          connectIds: MultiplePrimaryKeys${className}Dto,
+          disconnectIds: MultiplePrimaryKeys${className}Dto,
+          primaryKeyFields: PrimaryKeys${upperFirst(moduleName)}Dto,
+        ) {
+          const where${upperFirst(moduleName)}Conditions = primaryKeyFields as unknown as FindOptionsWhere<${upperFirst(moduleName)}>[];
+          const ${moduleName} = await this.${moduleName}Repository.findOne({
+            where: where${upperFirst(moduleName)}Conditions,
+            relations: ['${className.toLowerCase() + upperFirst(field.name!)}'],
+          });
+
+          if (!${moduleName}) throw new NotFoundException('${moduleName} not found');
+
+          const whereConditions = disconnectIds.items as FindOptionsWhere<${className}>[];
+          let ${className.toLowerCase()}sToRemove: ${className}[] = [];
+          if (Array.isArray(whereConditions) && whereConditions.length > 0) {
+            ${className.toLowerCase()}sToRemove = await this.${className.toLowerCase()}Repository.find({
+              where: whereConditions,
+            });
+          }
+
+          if (${className.toLowerCase()}sToRemove?.length !== disconnectIds.items.length) {
+            throw new NotFoundException('In the disconnectIds some or all ${className} not found');
+          }
+
+          const whereConditionsToAdd = connectIds.items as FindOptionsWhere<${className}>[];
+          let ${className.toLowerCase()}sToAdd: ${className}[] = [];
+          if (Array.isArray(whereConditionsToAdd) && whereConditionsToAdd.length > 0) {
+            ${className.toLowerCase()}sToAdd = await this.${className.toLowerCase()}Repository.find({
+              where: whereConditionsToAdd,
+            });
+          }
+
+          if (${className.toLowerCase()}sToAdd?.length !== connectIds.items.length) {
+            throw new NotFoundException('In the connectIds some or all ${className} not found');
+          }
+
+          const ${className.toLowerCase()}Meta = this.${className.toLowerCase()}Repository.metadata;
+          ${moduleName}['${className.toLowerCase() + upperFirst(field.name!)}'] = syncManyToManyRelation(
+            ${moduleName}['${className.toLowerCase() + upperFirst(field.name!)}'],
+            ${className.toLowerCase()}sToAdd,
+            ${className.toLowerCase()}sToRemove,
+            ${className.toLowerCase()}Meta,
+          );
+
+          return await this.${moduleName}Repository.save(${moduleName});
+        }`;
+
+      serviceContent =
+        serviceContent.slice(0, serviceContent.lastIndexOf('}')) +
+        `\n${serviceToAdd}\n` +
+        serviceContent.slice(serviceContent.lastIndexOf('}'));
+      await fsPromises.writeFile(servicePath, serviceContent);
+    }
+  }
+
+  private async runBuildAndMigrationCommands(templateData: any) {
+    const commands = [
+      'npm run build',
+      'npm run format',
+      `npx typeorm-ts-node-commonjs migration:run -d dist/src/data-source.js`,
+      'npm run seed:config',
+      `npm run seed:run -- --seed=${templateData.className}Seeder`,
+    ];
+
+    for (const cmd of commands) {
+      await execSync(cmd, { stdio: 'inherit' });
     }
   }
 }
